@@ -24,6 +24,10 @@ struct vhost_work {
 	int			  flushing;
 	unsigned		  queue_seq;
 	unsigned		  done_seq;
+	/* a worker might handle work items from different devices thus now we need
+	   to know the owner of each work item.
+	 */
+	struct vhost_virtqueue    *vq;
 };
 
 /* Poll a file (eventfd or socket) */
@@ -37,11 +41,11 @@ struct vhost_poll {
 	struct vhost_dev	 *dev;
 };
 
-void vhost_work_init(struct vhost_work *work, vhost_work_fn_t fn);
+void vhost_work_init(struct vhost_work *work, struct vhost_virtqueue *vq, vhost_work_fn_t fn);
 void vhost_work_queue(struct vhost_dev *dev, struct vhost_work *work);
 
 void vhost_poll_init(struct vhost_poll *poll, vhost_work_fn_t fn,
-		     unsigned long mask, struct vhost_dev *dev);
+		unsigned long mask, struct vhost_virtqueue  *vq);
 int vhost_poll_start(struct vhost_poll *poll, struct file *file);
 void vhost_poll_stop(struct vhost_poll *poll);
 void vhost_poll_flush(struct vhost_poll *poll);
@@ -54,7 +58,6 @@ struct vhost_log {
 	u64 len;
 };
 
-struct vhost_virtqueue;
 
 /* The virtqueue structure describes a queue attached to a device. */
 struct vhost_virtqueue {
@@ -120,9 +123,30 @@ struct vhost_dev {
 	int nvqs;
 	struct file *log_file;
 	struct eventfd_ctx *log_ctx;
+	struct vhost_worker *worker;
+};
+struct vhost_worker {
 	spinlock_t work_lock;
 	struct list_head work_list;
-	struct task_struct *worker;
+	struct task_struct *worker_thread;
+	
+	/* num of devices this worker is currently handling */
+	int num_devices;
+	/* worker id */
+	int id;
+	/* linked workers list */
+	struct list_head node;
+};
+
+struct vhost_workers_pool {
+	/* list of active workers */
+	struct list_head workers_list;
+	/* lock to protect the workers list */
+	spinlock_t workers_lock;
+	/* last worker id */
+	int last_worker_id;
+	/* max num of devices a single worker can handle */
+	int num_devices_per_worker;	
 };
 
 void vhost_dev_init(struct vhost_dev *, struct vhost_virtqueue **vqs, int nvqs);
@@ -176,4 +200,7 @@ static inline int vhost_has_feature(struct vhost_virtqueue *vq, int bit)
 {
 	return vq->acked_features & (1 << bit);
 }
+
+int __init vhost_init(void);
+void __exit vhost_exit(void);
 #endif
