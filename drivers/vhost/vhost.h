@@ -52,6 +52,7 @@ void vhost_poll_flush(struct vhost_poll *poll);
 void vhost_poll_queue(struct vhost_poll *poll);
 void vhost_work_flush(struct vhost_dev *dev, struct vhost_work *work);
 long vhost_vring_ioctl(struct vhost_dev *d, int ioctl, void __user *argp);
+bool vhost_can_continue(struct vhost_virtqueue  *vq, size_t processed_data, size_t data_min_limit, size_t data_max_limit);
 
 struct vhost_log {
 	u64 addr;
@@ -180,6 +181,8 @@ struct vhost_worker {
 	int id;
 	/* linked workers list */
 	struct list_head node;
+	/* tsc when the last work was processed from the work_list */
+	u64 last_work_tsc;
 	struct list_head vqpoll_list;
 };
 
