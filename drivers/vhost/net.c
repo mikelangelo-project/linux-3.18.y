@@ -458,10 +458,16 @@ static void handle_tx(struct vhost_net *net)
 		total_len += len;
 		vhost_net_tx_packet(net);
 		if (!vhost_can_continue(vq, total_len, VHOST_MIN_NET_WEIGHT, VHOST_MAX_NET_WEIGHT)) {
+			vq->stats.was_limited = 1;
+		if (vq->vqpoll.enabled)
+			vhost_enable_notify(&net->dev, vq);
+		else
 			vhost_poll_queue(&vq->poll);
 			break;
 		}
 	}
+	vq->stats.handled_bytes=total_len;
+
 out:
 	mutex_unlock(&vq->mutex);
 }
@@ -667,10 +673,17 @@ static void handle_rx(struct vhost_net *net)
 			vhost_log_write(vq, vq_log, log, vhost_len);
 		total_len += vhost_len;
 		if (!vhost_can_continue(vq, total_len, VHOST_MIN_NET_WEIGHT, VHOST_MAX_NET_WEIGHT)) {
-			vhost_poll_queue(&vq->poll);
+			vq->stats.was_limited = 1;
+			if (vq->vqpoll.enabled)
+				vhost_enable_notify(&net->dev, vq);
+				
+			else
+				vhost_poll_queue(&vq->poll);
 			break;
 		}
 	}
+	vq->stats.handled_bytes=total_len;
+
 out:
 	mutex_unlock(&vq->mutex);
 }
