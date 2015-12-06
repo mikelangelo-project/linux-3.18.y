@@ -26,6 +26,7 @@
 #include <linux/cgroup.h>
 #include <linux/module.h>
 #include <linux/jiffies.h>
+#include <linux/module.h>
 
 #include "vhost.h"
 
@@ -698,6 +699,7 @@ static void vhost_vq_free_iovecs(struct vhost_virtqueue *vq)
 	kfree(vq->heads);
 	vq->heads = NULL;
 }
+
 static void vhost_init_statistics(void) {
 	vhost_debugfs_dir = debugfs_create_dir("vhost", NULL);
 }
@@ -783,7 +785,7 @@ static void vhost_exit_queue_statistics(struct vhost_virtqueue* vq) {
 	debugfs_remove(vq->stats.debugfs_dir);
 }
 
-int __init vhost_init(void)
+static int __init vhost_init(void)
 {
 	workers_pool.num_devices_per_worker = devices_per_worker;
 	spin_lock_init(&workers_pool.workers_lock);
@@ -793,7 +795,7 @@ int __init vhost_init(void)
 	return 0;
 }
 
-void __exit vhost_exit(void)
+static void __exit vhost_exit(void)
 {
 	vhost_exit_statistics();
 }
@@ -2183,3 +2185,4 @@ MODULE_VERSION("0.0.1");
 MODULE_LICENSE("GPL v2");
 MODULE_AUTHOR("Michael S. Tsirkin");
 MODULE_DESCRIPTION("Host kernel accelerator for virtio");
+

@@ -11,6 +11,7 @@
 #include <linux/virtio_config.h>
 #include <linux/virtio_ring.h>
 #include <linux/virtio_blk.h>
+#include <linux/virtio_net.h>
 #include <linux/atomic.h>
 
 struct vhost_device;
@@ -305,6 +306,6 @@ static inline int vhost_has_feature(struct vhost_virtqueue *vq, int bit)
 	return vq->acked_features & (1 << bit);
 }
 
-int __init vhost_init(void);
-void __exit vhost_exit(void);
+void vhost_enable_zcopy(int vq);
+
 #endif
