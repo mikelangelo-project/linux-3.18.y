@@ -17,6 +17,8 @@
 #include <linux/device.h>
 #endif
 
+#define vhost_warn(msg, ...) \
+	WARN(0, "vhost-debug: %s:%d: "msg"\n", __FUNCTION__, __LINE__, ##__VA_ARGS__)
 #define vhost_printk(msg, ...) \
 	printk("vhost-debug: %s:%d: "msg"\n", __FUNCTION__, __LINE__, ##__VA_ARGS__)
 
@@ -50,6 +52,7 @@ struct vhost_work {
 	   to know the owner of each work item.
 	 */
 	struct vhost_virtqueue    *vq;
+	spinlock_t lock;
 };
 
 /* Poll a file (eventfd or socket) */
@@ -75,7 +78,7 @@ void vhost_poll_flush(struct vhost_poll *poll);
 void vhost_poll_queue(struct vhost_poll *poll);
 void vhost_work_flush(struct vhost_dev *dev, struct vhost_work *work);
 long vhost_vring_ioctl(struct vhost_dev *d, int ioctl, void __user *argp);
-bool vhost_can_continue(struct vhost_virtqueue  *vq, size_t processed_data, size_t data_min_limit, size_t data_max_limit);
+bool vhost_can_continue(struct vhost_virtqueue  *vq, size_t processed_data);
 
 struct vhost_log {
 	u64 addr;
@@ -139,6 +142,15 @@ struct vhost_virtqueue {
 	void __user *log_base;
 	struct vhost_log *log;
 	int id;
+	/* The minimum amount of bytes to be processed in a single service
+	 * cycle
+	 */
+	size_t min_processed_data_limit;
+
+	/* The maximum amount of bytes to be processed in a single service
+	 * cycle
+	 */
+	size_t max_processed_data_limit;
 	struct device *vhost_fs_dev;
 	struct {
 		u64 poll_kicks; /* number of kicks in poll mode */
@@ -149,6 +161,9 @@ struct vhost_virtqueue {
 		u64 poll_empty_cycles; /* number of cycles elapsed while the queue was empty */
 		u64 poll_coalesced; /* number of times this queue was coalesced */
 		u64 poll_limited; /* number of times the queue was limited by netweight during poll kicks*/
+		u64 poll_aggregated_wait_cycles; /* The total amount of cycles all the
+											work items in the ring buffer waited
+											for service. */
 		
 		u64 notif_works; /* number of works in notif mode */
 		u64 notif_cycles; /* cycles spent handling works in notif mode */
@@ -166,10 +181,6 @@ struct vhost_virtqueue {
 		u64 last_poll_empty_tsc; /* tsc when the queue was detected empty for the first time */
 		u64 handled_bytes; /* number of bytes handled by this queue in the last poll/notif. Must be updated by the concrete vhost implementations (vhost-net)*/
 		u64 was_limited; /* flag indicating if the queue was limited by net-weight during the last poll/notif. Must be updated by the concrete vhost implementations (vhost-net)*/
-
-		u64 epoch_last_kick; /* The last epoch that the queue kicked */
-		u64 epoch_last_work; /* The last epoch that we performed a work from this queue */
-		u64 work_this_epoch; /* The number of works we did from this queue this epoch */
 	} stats;
 	struct {
 		/* When a virtqueue is in vqpoll.enabled mode, it declares
@@ -204,20 +215,11 @@ struct vhost_virtqueue {
 		 */
 		int max_stuck_cycles;
 
-		/* The maximum number of pending items in the queue to consider the
-		 * queue stuck
+		/* The queue won't be considered stuck if it contains more then this
+		 * amount of items. This parameter is used in order to avoid classifying
+		 * "bursty" queue as a stuck queue (disable = -1).
 		 */
-		int max_pending_items;
-
-		/* The minimum amount of bytes to be processed in a single service
-		 * cycle
-		 */
-		size_t min_processed_data;
-
-		/* The maximum amount of bytes to be processed in a single service
-		 * cycle
-		 */
-		size_t max_processed_data;
+		int max_stuck_pending_items;
 
 		/* The minimum rate in which a polled queue can be polled (disable = 0)
 		 * Note: This is designed for non-latency sensitive queues, when we want

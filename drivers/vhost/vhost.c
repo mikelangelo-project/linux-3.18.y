@@ -54,8 +54,8 @@ MODULE_PARM_DESC(virtual_queue_default_max_stuck_cycles, "The default number "
 		"of cycles need to elapse in order to consider a queue as stuck "
 		"(-1 = disabled)");
 
-static int virtual_queue_default_max_pending_items = 0;
-module_param(virtual_queue_default_max_pending_items, int, S_IRUGO|S_IWUSR);
+static int virtual_queue_default_max_stuck_pending_items = 0;
+module_param(virtual_queue_default_max_stuck_pending_items, int, S_IRUGO|S_IWUSR);
 MODULE_PARM_DESC(virtual_queue_default_max_pending_items, "The default "
 		"maximum number of items pending in the queue in order to consider a "
 		"queue as stuck (0 = disabled)");
@@ -157,10 +157,10 @@ static ssize_t vhost_fs_get_epoch(struct class *class,
 		struct class_attribute *attr, char *buf);
 static ssize_t vhost_fs_inc_epoch(struct class *class,
 		struct class_attribute *attr, const char *buf, size_t count);
-static ssize_t vhost_fs_get_cycles_last_epoch(struct class *class,
+static ssize_t vhost_fs_get_cycles(struct class *class,
 		struct class_attribute *attr, char *buf);
-static ssize_t vhost_fs_status(struct class *class,
-		struct class_attribute *attr, char *buf);
+//static ssize_t vhost_fs_status(struct class *class,
+//		struct class_attribute *attr, char *buf);
 
 /* global attributes */
 static struct class_attribute vhost_fs_global_attrs[] = {
@@ -170,10 +170,10 @@ static struct class_attribute vhost_fs_global_attrs[] = {
 			vhost_fs_get_epoch, vhost_fs_inc_epoch),
 	/* Reading returns the number of cycles elapsed during the last epoch of
 	 * vhost. */
-	__ATTR(cycles_last_epoch, S_IRUSR | S_IRGRP| S_IROTH,
-			vhost_fs_get_cycles_last_epoch, NULL),
-	/* Reading returns the status of vhost. */
-	__ATTR(status, S_IRUSR | S_IRGRP| S_IROTH, vhost_fs_status, NULL)
+	__ATTR(cycles, S_IRUSR | S_IRGRP| S_IROTH,
+			vhost_fs_get_cycles, NULL),
+//	/* Reading returns the status of vhost. */
+//	__ATTR(status, S_IRUSR | S_IRGRP| S_IROTH, vhost_fs_status, NULL)
 };
 
 DECLARE_VHOST_FS_SHOW(vhost_fs_get_recent_new_workers);
@@ -303,6 +303,11 @@ static struct dev_ext_attribute vhost_fs_queue_attrs[] = {
 	/* Reading returns the number of times the queue was limited by netweight
 	 * during poll kicks. */
 	VHOST_FS_QUEUE_STAT_READONLY_ATTR(poll_limited, stats.poll_limited),
+	/* Reading returns the total amount of cycles all the work items in the ring
+	 * buffer waited for service. */
+	VHOST_FS_QUEUE_STAT_READONLY_ATTR(poll_aggregated_wait_cycles,
+									  stats.poll_aggregated_wait_cycles),
+
 
 	/* Reading returns the number of works in notif mode. */
 	VHOST_FS_QUEUE_STAT_READONLY_ATTR(notif_works, stats.notif_works),
@@ -331,14 +336,6 @@ static struct dev_ext_attribute vhost_fs_queue_attrs[] = {
 	VHOST_FS_QUEUE_STAT_READONLY_ATTR(handled_bytes, stats.handled_bytes),
 
 #if 1 /* patchouli vhost-pollmode */
-	/* Reading returns the last epoch that the queue kicked */
-	VHOST_FS_QUEUE_STAT_READONLY_ATTR(epoch_last_kick, stats.epoch_last_kick),
-	/* Reading returns the last epoch that we performed a work from this
-	 * queue */
-	VHOST_FS_QUEUE_STAT_READONLY_ATTR(epoch_last_work, stats.epoch_last_work),
-	/* Reading returns the number of works we did from this queue this epoch */
-	VHOST_FS_QUEUE_STAT_READONLY_ATTR(work_this_epoch, stats.work_this_epoch),
-
 	/* Writing starts/stops polling of virtual queue.
 	 * Reading returns the current value. */
 	{__ATTR(poll, S_IWUSR | S_IRUSR | S_IWGRP | S_IRGRP | S_IROTH,
@@ -346,24 +343,26 @@ static struct dev_ext_attribute vhost_fs_queue_attrs[] = {
 	/* Writing sets the minimum amount of bytes to be processed in a single
 	 * service cycle of virtual queue (disable = 0).
 	 * Reading returns the current value. */
-	VHOST_FS_QUEUE_STAT_ATTR(min_processed_data, vqpoll.min_processed_data),
+	VHOST_FS_QUEUE_STAT_ATTR(min_processed_data_limit, min_processed_data_limit),
 	/* Writing sets the maximum amount of bytes to be processed in a single
 	 * service cycle of virtual queue (disable = -1).
 	 * Reading returns the current value. */
-	VHOST_FS_QUEUE_STAT_ATTR(max_processed_data, vqpoll.max_processed_data),
+	VHOST_FS_QUEUE_STAT_ATTR(max_processed_data_limit, max_processed_data_limit),
 	/* Writing sets the maximum number of pending items in the queue to
 	 * consider the queue stuck (disable = -1).
 	 * Reading returns the current value. */
-	VHOST_FS_QUEUE_STAT_ATTR(max_pending_items, vqpoll.max_pending_items),
+	VHOST_FS_QUEUE_STAT_ATTR(max_stuck_pending_items, vqpoll.max_stuck_pending_items),
 	/* Writing sets the number of need to elapse without service to consider
 	 * the queue stuck (disable = -1).
 	 * Reading returns the current value. */
 	VHOST_FS_QUEUE_STAT_ATTR(max_stuck_cycles, vqpoll.max_stuck_cycles),
+	/* Reading returns the end of the last polling in cycles. */
+	VHOST_FS_QUEUE_STAT_ATTR(last_poll_cycles, stats.last_poll_tsc_end),
+
 	/* Writing sets the minimum rate in which a polled queue can be polled
 	 * (disable = 0).
 	 * Reading returns the current value. */
 	VHOST_FS_QUEUE_STAT_READONLY_ATTR(min_poll_rate, vqpoll.min_poll_rate),
-
 #endif
 
 	/* Reading returns the id of the device this queue is contained in. */
@@ -422,8 +421,7 @@ static struct vhost_workers_pool workers_pool;
 static struct vhost_dev_table dev_table;
 
 static atomic_t epoch;
-static u64 cycles_last_epoch;
-static u64 epoch_start_tsc;
+static u64 cycles_start_tsc;
 
 #define vhost_used_event(vq) ((u16 __user *)&vq->avail->ring[vq->num])
 #define vhost_avail_event(vq) ((u16 __user *)&vq->used->ring[vq->num])
@@ -464,6 +462,7 @@ void vhost_work_init(struct vhost_work *work, struct vhost_virtqueue *vq, vhost_
 	work->flushing = 0;
 	work->queue_seq = work->done_seq = 0;
 	work->vq = vq;
+	spin_lock_init(&work->lock);
 }
 EXPORT_SYMBOL_GPL(vhost_work_init);
 
@@ -519,13 +518,11 @@ EXPORT_SYMBOL_GPL(vhost_poll_stop);
  * @work [in] the work that is checked.
  * @return 1 if the work is no queued or it is done, 0 otherwise.
  */
-static bool vhost_work_seq_done(struct vhost_worker *worker,
-		struct vhost_work *work,
-		unsigned seq){
+static bool vhost_work_seq_done(struct vhost_work *work, unsigned seq){
 	int left;
-	spin_lock_irq(&worker->work_lock);
+	spin_lock_irq(&work->lock);
 	left = seq - work->done_seq;
-	spin_unlock_irq(&worker->work_lock);
+	spin_unlock_irq(&work->lock);
 	return left <= 0;
 }
 
@@ -534,21 +531,20 @@ static bool vhost_work_seq_done(struct vhost_worker *worker,
  * @worker [in] the worker that performs the work.
  * @work [in] the work that is checked.
  */
-static void vhost_worker_flush_work(struct vhost_worker *worker,
-		struct vhost_work *work){
+static void vhost_worker_flush_work(struct vhost_work *work){
 	unsigned seq;
 	int flushing;
 
-	spin_lock_irq(&worker->work_lock);
+	spin_lock_irq(&work->lock);
 	seq = work->queue_seq;
 	work->flushing++;
-	spin_unlock_irq(&worker->work_lock);
+	spin_unlock_irq(&work->lock);
 
-	wait_event(work->done, vhost_work_seq_done(worker, work, seq));
+	wait_event(work->done, vhost_work_seq_done(work, seq));
 
-	spin_lock_irq(&worker->work_lock);
+	spin_lock_irq(&work->lock);
 	flushing = --work->flushing;
-	spin_unlock_irq(&worker->work_lock);
+	spin_unlock_irq(&work->lock);
 	BUG_ON(flushing < 0);
 }
 /*
@@ -558,7 +554,7 @@ static void vhost_worker_flush_work(struct vhost_worker *worker,
  */
 void vhost_work_flush(struct vhost_dev *dev, struct vhost_work *work)
 {
-	vhost_worker_flush_work(dev->worker, work);
+	vhost_worker_flush_work(work);
 }
 EXPORT_SYMBOL_GPL(vhost_work_flush);
 
@@ -577,10 +573,11 @@ EXPORT_SYMBOL_GPL(vhost_poll_flush);
  * Note: This function circumvent the checks regarding the device state. If the
  * device this originates from can be transfered DO NOT use this function.
  */
-static void vhost_work_force_queue(struct vhost_worker* worker,
+static void vhost_work_force_enqueue(struct vhost_worker* worker,
 		struct vhost_work *work){
 	unsigned long flags;
 	spin_lock_irqsave(&worker->work_lock, flags);
+	spin_lock(&work->lock);
 	/* check that the work was not added to any work list of any worker thread. */
 	if (list_empty(&work->node)) {
 		list_add_tail(&work->node, &worker->work_list);
@@ -588,6 +585,7 @@ static void vhost_work_force_queue(struct vhost_worker* worker,
 		work->queue_seq++;
 		wake_up_process(worker->worker_thread);
 	}
+	spin_unlock(&work->lock);
 	spin_unlock_irqrestore(&worker->work_lock, flags);
 }
 /*
@@ -602,32 +600,34 @@ void vhost_work_queue(struct vhost_dev *dev, struct vhost_work *work)
 
 	if (unlikely(atomic_read(&dev->transfer.operation_mode) ==
 			VHOST_DEVICE_OPERATION_MODE_TRANSFERRING)){
+		spin_lock_irqsave(&dev->transfer.suspended_work_lock, flags);
+		spin_lock(&work->lock);
 		/* the device is in transfer, add work to device's suspended list. */
 		if (list_empty(&work->node)) {
-			spin_lock_irqsave(&dev->transfer.suspended_work_lock, flags);
-
 			/* At this point we should make sure that the device is still
 			 * Transferring before we can add the work to the suspended work
 			 * list */
 			if (unlikely(atomic_read(&dev->transfer.operation_mode) ==
 						VHOST_DEVICE_OPERATION_MODE_NORMAL)){
+				spin_unlock(&work->lock);
 				spin_unlock_irqrestore(&dev->transfer.suspended_work_lock, flags);
-				vhost_work_force_queue(dev->worker, work);
+				vhost_work_force_enqueue(dev->worker, work);
 				return;
 			}
 
 			list_add_tail(&work->node, &dev->transfer.suspended_work_list);
 			++dev->transfer.suspended_works;
 			++work->queue_seq;
-			spin_unlock_irqrestore(&dev->transfer.suspended_work_lock, flags);
 		}
+		spin_unlock(&work->lock);
+		spin_unlock_irqrestore(&dev->transfer.suspended_work_lock, flags);
 //		vhost_printk("work %p for device %d was added to suspended list.",
 //				work, dev->id);
 		return;
 	}
 //	vhost_printk("trying to add work %p for device %d to worker %d work_list.",
 //					  work, dev->id, dev->worker->id);
-	vhost_work_force_queue(dev->worker, work);
+	vhost_work_force_enqueue(dev->worker, work);
 //	vhost_printk("work %p for device %d was successfully added to work list of worker %d.",
 //				work, dev->id, dev->worker->id);
 }
@@ -686,7 +686,6 @@ static void vhost_vq_enable_vqpoll_unsafe(struct vhost_virtqueue *vq){
 		vhost_disable_notify(vq->dev, vq);
 		list_add_tail(&vq->vqpoll.link, &vq->dev->worker->vqpoll_list);
 	}
-	vq->stats.epoch_last_kick = atomic_read(&epoch);
 	__get_user(vq->avail_idx, &vq->avail->idx); // TODO: do we need to do this? also,  if we do, why not just use the mapped below?
 
 	vq->vqpoll.enabled = true;
@@ -780,9 +779,9 @@ static void vhost_vq_reset(struct vhost_dev *dev,
 	vq->vqpoll.shutdown = false;
 	vq->vqpoll.avail_mapped = NULL;
 	vq->vqpoll.max_stuck_cycles = virtual_queue_default_max_stuck_cycles;
-	vq->vqpoll.max_pending_items = virtual_queue_default_max_pending_items;
-//	vq->vqpoll.min_processed_data;
-//	vq->vqpoll.max_processed_data;
+	vq->vqpoll.max_stuck_pending_items = virtual_queue_default_max_stuck_pending_items;
+	vq->min_processed_data_limit = 1500;
+	vq->max_processed_data_limit = 524288;
 	vq->vqpoll.min_poll_rate = virtual_queue_default_min_poll_rate;
 }
 
@@ -811,13 +810,9 @@ static struct vhost_virtqueue *roundrobin_poll(struct list_head *list) {
 	struct vhost_virtqueue *vq;
 	u16 avail_idx;
 
-//	vhost_printk("STARRRRRRTTTTTTT\n");
 	if (list_empty(list)){
-//		vhost_printk("END - no soup for you\n");
 		return NULL;
 	}
-
-//	vhost_printk("The poll list is not empty...");
 
 	vq = list_first_entry(list, struct vhost_virtqueue, vqpoll.link);
 	WARN_ON(!vq->vqpoll.enabled);
@@ -825,10 +820,13 @@ static struct vhost_virtqueue *roundrobin_poll(struct list_head *list) {
 	WARN_ON(list_empty(list));
 
 	/* If poll_coalescing_rate is set, avoid kicking the same vq too often */
-	if (atomic_read(&epoch) - vq->stats.epoch_last_kick < vq->vqpoll.min_poll_rate) {
-		vq->stats.poll_coalesced++;
-//		vhost_printk("END - we excided the amount of time the vq can be kicked.");
-		return NULL;
+	if (vq->vqpoll.min_poll_rate > 0) {
+		u64 tsc;
+		rdtscll(tsc);
+		if (vq->vqpoll.min_poll_rate < tsc - vq->stats.last_poll_tsc_end){
+			vq->stats.poll_coalesced++;
+			return NULL;
+		}
 	}
 	/* See if there is any new work available from the guest. */
 	/* TODO: need to check the optional idx feature, and if we haven't
@@ -847,7 +845,7 @@ static struct vhost_virtqueue *roundrobin_poll(struct list_head *list) {
 	}
 	vq->stats.poll_empty++;
 	/* Remember the first time the queue was empty to measure the amount
-	   of cycles elasped until we detect work */
+	   of cycles elapsed until we detect work */
 	if (vq->stats.last_poll_empty_tsc == 0)
 		rdtscll(vq->stats.last_poll_empty_tsc);
 
@@ -862,85 +860,89 @@ static struct vhost_virtqueue *roundrobin_poll(struct list_head *list) {
  * processed is less than the specified limit.
  */
 bool vhost_can_continue(struct vhost_virtqueue  *vq,
-		size_t processed_data,
-		size_t data_min_limit,
-		size_t data_max_limit) {
+		size_t processed_data) {
 	struct vhost_virtqueue *vq_iterator, *next = NULL;
 	struct vhost_worker *worker = vq->dev->worker;
 	struct list_head *list = &vq->dev->worker->vqpoll_list;
 	u64 elapsed_cycles;
 	u64 cycles;
 
-
 	// if we didn't process the minimum amount of data we can always continue
-	if (processed_data < data_min_limit)
+	if (processed_data < vq->min_processed_data_limit)
+			vq->stats.was_limited = 1;
 		return true;
 
 	// If we processed more than the maximum we can not continue
-	if (processed_data > data_max_limit)
-		return false;
+	if (processed_data > vq->max_processed_data_limit)
+		goto cannot_continue;
 
 	rdtscll(cycles);
 	elapsed_cycles = cycles - vq->dev->worker->last_work_tsc;
 	// if there are work items pending for too long we can not continue
-	if (worker->work_list_max_stuck_cycles>=0 &&
-			elapsed_cycles>worker->work_list_max_stuck_cycles &&
+	if (worker->work_list_max_stuck_cycles >= 0 &&
+			elapsed_cycles > worker->work_list_max_stuck_cycles &&
 			!list_empty(&vq->dev->worker->work_list)) {
-		vq->dev->worker->stats.stuck_works++;
-		return false;
+		goto cannot_continue;
 	}
 
-	// check if there are stuck queues 
-	if (vq->vqpoll.max_stuck_cycles >=0) {
-		list_for_each_entry_safe(vq_iterator, next, list, vqpoll.link) {                        
-			u16 pending_items;                      
+	if (vq->vqpoll.max_stuck_cycles < 0) {
+		// stuck queues option is turned off
+		return true;
+	}
+	rdtscll(cycles);
+	// check if there are stuck queues
+	list_for_each_entry_safe(vq_iterator, next, list, vqpoll.link) {
+		u16 pending_items;
 
-			// ignore the queue that is currently being processed
-			if (vq_iterator == vq) {
-				vq_iterator->vqpoll.last_pending_items = 0;
-				continue;
-			}
+		// ignore the queue that is currently being processed
+		if (vq_iterator == vq) {
+			vq_iterator->vqpoll.last_pending_items = 0;
+			continue;
+		}
 
-			// ignore queues that has no pending data
-			pending_items = vq_iterator->vqpoll.avail_mapped->idx - vq_iterator->last_avail_idx;
-			if (pending_items == 0) {
-				vq_iterator->vqpoll.last_pending_items = 0;
-				continue;
-			}
+		// ignore queues that has no pending data
+		pending_items = vq_iterator->vqpoll.avail_mapped->idx - vq_iterator->last_avail_idx;
+		if (pending_items == 0) {
+			vq_iterator->vqpoll.last_pending_items = 0;
+			continue;
+		}
 
-			rdtscll(cycles);
-			// check if the queue stuck with pending data since the last check (?)
-			if (pending_items == vq_iterator->vqpoll.last_pending_items) {
-				// stuck sizes is used to avoid detecting a bursty queue as a stuck queue
-				// (don't consider a queue stuck if it holds too many items = max_queue_stuck_size)
-				if (vq->vqpoll.max_pending_items >  0 &&  pending_items > vq->vqpoll.max_pending_items)
-					continue;
+		// check if the queue stuck with pending data since the last check (?)
+		if (pending_items != vq_iterator->vqpoll.last_pending_items) {
+			// the queue is not stuck, reset stuck
+			vq_iterator->vqpoll.last_pending_items = pending_items;
+			vq_iterator->vqpoll.stuck_cycles = cycles;
+			continue;
+		}
 
-				elapsed_cycles = cycles - vq_iterator->vqpoll.stuck_cycles;                           
-				// is the queue stuck for too long ?
-				if (elapsed_cycles >= vq->vqpoll.max_stuck_cycles) {
+		// stuck sizes is used to avoid detecting a bursty queue as a stuck queue
+		// (don't consider a queue stuck if it holds too many items = max_queue_stuck_size)
+		if (vq_iterator->vqpoll.max_stuck_pending_items >  0 &&
+				pending_items > vq_iterator->vqpoll.max_stuck_pending_items)
+			continue;
 
-					// put current queue in the 2nd place if it didn't send more than half of the max
-					// and it's being polled
-					if (vq->vqpoll.enabled && processed_data < data_max_limit / 2)
-						list_move(&vq->vqpoll.link, list);
+		elapsed_cycles = cycles - vq_iterator->vqpoll.stuck_cycles;
+		// is the queue stuck for too long ?
+		if (elapsed_cycles >= vq_iterator->vqpoll.max_stuck_cycles) {
+			// put current queue in the 2nd place if it didn't send more than half of the max
+			// and it's being polled
+			if (vq->vqpoll.enabled && processed_data < vq->max_processed_data_limit / 2)
+				list_move(&vq->vqpoll.link, list);
 
-					// put stuck queue in the 1st place if it's being polled
-					list_move(&vq_iterator->vqpoll.link, list);
-					vq_iterator->stats.stuck_times++;
-					vq_iterator->stats.stuck_cycles+=elapsed_cycles;
-					return false;
-				}
-			} else {
-				// the queue is not stuck, reset stuck 
-				vq_iterator->vqpoll.last_pending_items = pending_items;
-				vq_iterator->vqpoll.stuck_cycles = cycles;
-			}
+			// put stuck queue in the 1st place if it's being polled
+			list_move(&vq_iterator->vqpoll.link, list);
+			vq_iterator->stats.stuck_times++;
+			vq_iterator->stats.stuck_cycles+=elapsed_cycles;
+			goto cannot_continue;
 		}
 	}
 
 	// no stuck queues, no works, no maximum  => we can continue
 	return true;
+
+cannot_continue:
+	vq->stats.was_limited = 1;
+	return false;
 }
 EXPORT_SYMBOL_GPL(vhost_can_continue);
 
@@ -967,42 +969,43 @@ static int vhost_worker_thread(void *data)
 		/* mb paired w/ kthread_stop */
 		set_current_state(TASK_INTERRUPTIBLE);
 
-		spin_lock_irq(&worker->work_lock);
 		if (work) {
+			spin_lock_irq(&work->lock);
 			work->done_seq = seq;
 			if (work->flushing)
 				wake_up_all(&work->done);
-		}
+			spin_unlock_irq(&work->lock);
+		}               
 
-		if (kthread_should_stop()) {
-			spin_unlock_irq(&worker->work_lock);
-			__set_current_state(TASK_RUNNING);
-			break;
-		}
+//		if (kthread_should_stop()) {
+//			spin_unlock_irq(&worker->work_lock);
+//			__set_current_state(TASK_RUNNING);
+//			break;
+//		}
+		spin_lock_bh(&worker->work_lock);
 		if (!list_empty(&worker->work_list)) {
 			work = list_first_entry(&worker->work_list, struct vhost_work, node);
-//			vhost_printk("worker %d found new work = %p\n.", worker->id, work);
+			spin_lock_irq(&work->lock);
 			list_del_init(&work->node);
 			worker->stats.pending_works--;
 			seq = work->queue_seq;
+			spin_unlock_irq(&work->lock);
 		} else if (unlikely(atomic_read(&worker->state) ==
 				VHOST_WORKER_STATE_SHUTDOWN)) {
 			/* The work list is empty and worker state is shutdown so we shut
-			 * the thread. */
-			spin_unlock_irq(&worker->work_lock);
+			 * the thread. We shutdown here because it is after all the threads
+			 * waiting on the shutdown work where informed that the shutdown
+			 * work ended. */
+			spin_unlock_bh(&worker->work_lock);
 			vhost_printk("worker %d stopping\n.", worker->id);
 			return 1;
 		} else {
 			work = NULL;
 		}
-		spin_unlock_irq(&worker->work_lock);
+		spin_unlock_bh(&worker->work_lock);
 		if (work) {
 			struct vhost_virtqueue *vq = work->vq;
 			__set_current_state(TASK_RUNNING);
-			if (kthread_should_stop()) {
-				spin_unlock_irq(&worker->work_lock);
-				break;
-			}
 			if (vq) {
 				set_mm(vq);
 				if (vq->avail && (vq->last_avail_idx == vq->avail->idx+1))
@@ -1012,7 +1015,7 @@ static int vhost_worker_thread(void *data)
 				rdtscll(work_start_tsc);
 				work->fn(work);
 				rdtscll(work_end_tsc);
-				vq->stats.notif_cycles+=(work_end_tsc-work_start_tsc);
+				vq->stats.notif_cycles += (work_end_tsc - work_start_tsc);
 				if (likely(vq->stats.notif_works++ > 0))
 					vq->stats.notif_wait+=(work_start_tsc-vq->stats.last_notif_tsc_end);
 				vq->stats.last_notif_tsc_end = work_end_tsc;
@@ -1024,16 +1027,6 @@ static int vhost_worker_thread(void *data)
 				worker->stats.noqueue_works++;
 			}
 			rdtscll(worker->last_work_tsc);
-			/* Keep track of the work rate, for deciding when to
-			 * enable polling */
-			if (vq) {
-				int cur_epoch = atomic_read(&epoch);
-				if (vq->stats.epoch_last_work != cur_epoch) {
-					vq->stats.epoch_last_work = cur_epoch;
-					vq->stats.work_this_epoch = 1;
-				}
-				vq->stats.work_this_epoch++;
-			}
 			/* If vq is in the round-robin list of virtqueues being
 			 * constantly checked by this thread, move vq the end
 			 * of the queue, because it had its fair chance now.
@@ -1044,13 +1037,6 @@ static int vhost_worker_thread(void *data)
 		} else
 			worker->stats.empty_works++;
 
-//	if (has_poll && list_empty(&worker->vqpoll_list)){
-//		vhost_printk("worker %d stopped polling", worker->id);
-//		has_poll = 0;
-//	}else if (!has_poll && !list_empty(&worker->vqpoll_list)){
-//		vhost_printk("worker %d started polling", worker->id);
-//		has_poll = 1;
-//	}
 	/* Check one virtqueue from the round-robin list */
 	if (!list_empty(&worker->vqpoll_list)) {
 		struct vhost_virtqueue *vq = NULL;
@@ -1071,7 +1057,6 @@ static int vhost_worker_thread(void *data)
 			vq->stats.last_poll_tsc_end = poll_end_tsc;
 			vq->stats.poll_bytes+=vq->stats.handled_bytes;
 			vq->stats.poll_limited+=vq->stats.was_limited;
-			vq->stats.epoch_last_kick=atomic_read(&epoch);
 		}
 		else {
 			worker->stats.empty_polls++;
@@ -1389,7 +1374,7 @@ static int vhost_dev_transfer_to_worker(struct vhost_dev *d,
 
 	vhost_printk("adding work %p to queue.\n", &transfer);
 	vhost_work_init(&transfer.work, NULL, vhost_detach_device_from_worker);
-	vhost_work_force_queue(d->worker, &transfer.work);
+	vhost_work_force_enqueue(d->worker, &transfer.work);
 	vhost_printk("enqueued detach device %d\n", d->id);
 	vhost_work_flush(d, &transfer.work);
 	vhost_printk("detached device %d\n", d->id);
@@ -1400,7 +1385,7 @@ static int vhost_dev_transfer_to_worker(struct vhost_dev *d,
 
 	/* Place the vhost_attach_device_to_worker in the dest worker work_list */
 	vhost_work_init(&transfer.work, NULL, vhost_attach_device_to_worker);
-	vhost_work_force_queue(w, &transfer.work);
+	vhost_work_force_enqueue(w, &transfer.work);
 	vhost_printk("enqueued attach device %d\n", d->id);
 	vhost_work_flush(d, &transfer.work);
 	vhost_printk("attached device %d\n", d->id);
@@ -1458,10 +1443,10 @@ static int vhost_worker_remove_unsafe(struct vhost_worker *worker){
 	shutdown.worker = worker;
 	vhost_work_init(&shutdown.work, NULL, vhost_worker_shutdown_work);
 	vhost_printk("\n");
-	vhost_work_force_queue(worker, &shutdown.work);
+	vhost_work_force_enqueue(worker, &shutdown.work);
 	/*wait until the final work is done.*/
 	vhost_printk("wait until the final work is done.");
-	vhost_worker_flush_work(worker, &shutdown.work);
+	vhost_worker_flush_work(&shutdown.work);
 	vhost_printk("\n");
 
 	/* cleanup worker */
@@ -1554,8 +1539,7 @@ static int __init vhost_init(void)
 	spin_lock_init(&dev_table.entries_lock);
 	INIT_LIST_HEAD(&dev_table.entries);
 	atomic_set(&epoch, 0);
-	cycles_last_epoch = 0;
-	rdtscll(epoch_start_tsc);
+	rdtscll(cycles_start_tsc);
 
 	vhost_printk("calling vhost_fs_init");
 	vhost_fs_init();
@@ -1957,9 +1941,9 @@ long vhost_dev_set_owner(struct vhost_dev *dev)
 	dev->mm = get_task_mm(current);
 	dev->owner = current;
 	if (!dev->worker)
-		printk("abelg: vhost_dev_set_owner: worker not assigned!\n");
+		vhost_printk("vhost_dev_set_owner: worker not assigned!\n");
 	else
-		printk("abelg: vhost_dev_set_owner: using worker %d\n",
+		vhost_printk("vhost_dev_set_owner: using worker %d\n",
 		       dev->worker->id);
 
 	wake_up_process(dev->worker->worker_thread);  /* avoid contributing to loadavg */
@@ -3190,7 +3174,6 @@ bool vhost_enable_notify(struct vhost_dev *dev, struct vhost_virtqueue *vq)
 		if (list_empty(&vq->vqpoll.link)) {
 			list_add_tail(&vq->vqpoll.link,
 				&vq->dev->worker->vqpoll_list);
-			vq->stats.epoch_last_kick=atomic_read(&epoch);
 		}
 //		vhost_printk("END - worker %d, dev %d, vq %d", dev->worker->id, dev->id, dev->vqs - vq);
 		return false;
@@ -3308,21 +3291,31 @@ static struct vhost_worker *vhost_get_worker(int worker_id){
 	return found == 1? worker: NULL;
 }
 
-static int vhost_fs_get_worker_from_string(const char __user *buffer,
+static int vhost_fs_get_worker_from_string(const char *buffer,
 		unsigned long count, struct vhost_worker **out){
 	long worker_id;
 	int err;
+	vhost_printk("START\n");
 	if (count < 3){
+		vhost_warn("Error: count was too short, only %lu\n", count);
 		return -EINVAL;
 	}
 	if (buffer[0] != 'w' || buffer[1] != '.'){
+		vhost_warn("Error: buffer doesn't start with 'w.' but with: '%c%c'\n",
+				buffer[0], buffer[1]);
 		return -EINVAL;
 	}
 	if ((err = kstrtol(buffer + 2, 0, &worker_id)) != 0){
+		vhost_warn("Error: could not convert buffer: %s to number\n",
+				buffer + 2);
 		return err;
 	}
-	*out = vhost_get_worker(worker_id);
-	return *out == NULL? -EINVAL : 0;
+	if ((*out = vhost_get_worker(worker_id)) == NULL){
+		vhost_warn("Error: could not find worker w.%ld\n", worker_id);
+		return -EINVAL;
+	}
+	vhost_printk("END\n");
+	return 0;
 }
 
 static ssize_t vhost_fs_get_epoch(struct class *class,
@@ -3341,146 +3334,145 @@ static ssize_t vhost_fs_inc_epoch(struct class *class,
 		const char *buffer, size_t count){
 	long value;
 	int err;
-	u64 end;
 	vhost_printk("START\n");
 	if ((err = kstrtol(buffer, 0, &value)) != 0){
-		vhost_printk("ERROR: %d.\n", err);
+		vhost_warn("Error: %d.\n", err);
 		return err;
 	}
 	if (value != 1){
-		vhost_printk("ERROR: %d.\n", -EINVAL);
+		vhost_warn("Error: %d.\n", -EINVAL);
 		return -EINVAL;
 	}
 	atomic_inc(&epoch);
-	rdtscll(end);
-	cycles_last_epoch = end - epoch_start_tsc;
-	rdtscll(epoch_start_tsc);
 	vhost_printk("DONE!\n");
 	return count;
 }
 
-static ssize_t vhost_fs_get_cycles_last_epoch(struct class *class,
+static ssize_t vhost_fs_get_cycles(struct class *class,
 		struct class_attribute *attr, char *buf){
 	ssize_t length;
+	u64 end, cycles;
 	vhost_printk("START\n");
-	length = sprintf(buf, "%llu\n", cycles_last_epoch);
+	rdtscll(end);
+	cycles = end - cycles_start_tsc;
+	length = sprintf(buf, "%llu\n", cycles);
 	vhost_printk("page = %s length = %ld\n", buf, length);
 	vhost_printk("DONE!\npage = %s length = %ld\n",
 			buf, length);
 	return length;
 }
 
-static ssize_t vhost_fs_status(struct class *class, struct class_attribute *attr,
-		char *buf);
-
-static ssize_t vhost_fs_show_all_class_attributes(struct class *class,
-		struct class_attribute *attrs, size_t attrs_count, char *buf){
-	int i = 0;
-	int error;
-	ssize_t length = 0;
-	length = sprintf(buf, "%s:\n", class->name);
-	for (; i < attrs_count; ++i){
-		if (attrs[i].show == NULL || attrs[i].show == vhost_fs_status)
-			continue;
-		length += sprintf(buf + length, "%s:", attrs[i].attr.name);
-		if (IS_ERR_VALUE(error = attrs[i].show(class, &attrs[i], buf + length)))
-			return error;
-
-		length += error;
-//		length += sprintf(buf + length, "\n");
-	}
-	return length;
-}
-
-struct vhost_fs_status_struct {
-	char *buf;
-	ssize_t length;
-
-	struct dev_ext_attribute *attrs;
-	size_t attrs_count;
-};
-
-static int vhost_fs_show_all_dir_attributes(struct device *dev, void *data){
-	struct vhost_fs_status_struct *status = (struct vhost_fs_status_struct *)data;
-	int i = 0;
-	int res;
-	status->length += sprintf(status->buf + status->length, "%s:\n", dev_name(dev));
-	for (; i < status->attrs_count; ++i){
-		if (status->attrs[i].attr.show == NULL)
-			continue;
-		status->length += sprintf(status->buf + status->length, "%s:",
-				status->attrs[i].attr.attr.name);
-		if (IS_ERR_VALUE(res = status->attrs[i].attr.show(dev, &status->attrs[i].attr,
-				status->buf + status->length))){
-			return res;
-		}
-		status->length += res;
-	}
-	return 0;
-}
-
-static ssize_t vhost_fs_status(struct class *class, struct class_attribute *attr,
-		char *buf){
-	ssize_t length = 0;
-	int res;
-	struct vhost_fs_status_struct status;
-
-	vhost_printk("START\n");
-	// print global attributes
-	if (IS_ERR_VALUE(res = vhost_fs_show_all_class_attributes(class,
-			vhost_fs_global_attrs,
-			ARRAY_LENGTH(vhost_fs_global_attrs), buf + length))){
-		return res;
-	}
-	length += res;
-	vhost_printk("length = %ld\n", length);
-	// print global workers attributes
-	status.buf = buf + length;
-	status.length = 0;
-	status.attrs = vhost_fs_global_worker_attrs;
-	status.attrs_count = ARRAY_LENGTH(vhost_fs_global_worker_attrs);
-	if (IS_ERR_VALUE(res = vhost_fs_show_all_dir_attributes(vhost_fs_workers,
-			&status))){
-		return res;
-	}
-	length += status.length;
-	vhost_printk("length = %ld\n", length);
-	// print each worker attributes
-	status.buf = buf + length;
-	status.length = 0;
-	status.attrs = vhost_fs_per_worker_attrs;
-	status.attrs_count = ARRAY_LENGTH(vhost_fs_per_worker_attrs);
-	if (IS_ERR_VALUE(res = device_for_each_child(vhost_fs_workers, &status,
-			vhost_fs_show_all_dir_attributes))){
-		return res;
-	}
-	length += status.length;
-	vhost_printk("length = %ld\n", length);
-	// print each device attributes
-	status.buf = buf + length;
-	status.length = 0;
-	status.attrs = vhost_fs_device_attrs;
-	status.attrs_count = ARRAY_LENGTH(vhost_fs_device_attrs);
-	if (IS_ERR_VALUE(res = device_for_each_child(vhost_fs_devices, &status,
-			vhost_fs_show_all_dir_attributes))){
-		return res;
-	}
-	length += status.length;
-	vhost_printk("length = %ld\n", length);
-	// print each queue attributes
-	status.buf = buf+length;
-	status.length = 0;
-	status.attrs = vhost_fs_queue_attrs;
-	status.attrs_count = ARRAY_LENGTH(vhost_fs_queue_attrs);
-	if (IS_ERR_VALUE(res = device_for_each_child(vhost_fs_queues, &status,
-			vhost_fs_show_all_dir_attributes))){
-		return res;
-	}
-	length += status.length;
-
-	vhost_printk("DONE! length = %ld\n", length);
-	return length;
-}
+//static ssize_t vhost_fs_status(struct class *class, struct class_attribute *attr,
+//		char *buf);
+//
+//static ssize_t vhost_fs_show_all_class_attributes(struct class *class,
+//		struct class_attribute *attrs, size_t attrs_count, char *buf){
+//	int i = 0;
+//	int error;
+//	ssize_t length = 0;
+//	length = sprintf(buf, "%s:\n", class->name);
+//	for (; i < attrs_count; ++i){
+//		if (attrs[i].show == NULL || attrs[i].show == vhost_fs_status)
+//			continue;
+//		length += sprintf(buf + length, "%s:", attrs[i].attr.name);
+//		if (IS_ERR_VALUE(error = attrs[i].show(class, &attrs[i], buf + length)))
+//			return error;
+//
+//		length += error;
+////		length += sprintf(buf + length, "\n");
+//	}
+//	return length;
+//}
+//
+//struct vhost_fs_status_struct {
+//	char *buf;
+//	ssize_t length;
+//
+//	struct dev_ext_attribute *attrs;
+//	size_t attrs_count;
+//};
+//
+//static int vhost_fs_show_all_dir_attributes(struct device *dev, void *data){
+//	struct vhost_fs_status_struct *status = (struct vhost_fs_status_struct *)data;
+//	int i = 0;
+//	int res;
+//	status->length += sprintf(status->buf + status->length, "%s:\n", dev_name(dev));
+//	for (; i < status->attrs_count; ++i){
+//		if (status->attrs[i].attr.show == NULL)
+//			continue;
+//		status->length += sprintf(status->buf + status->length, "%s:",
+//				status->attrs[i].attr.attr.name);
+//		if (IS_ERR_VALUE(res = status->attrs[i].attr.show(dev, &status->attrs[i].attr,
+//				status->buf + status->length))){
+//			return res;
+//		}
+//		status->length += res;
+//	}
+//	return 0;
+//}
+//
+//static ssize_t vhost_fs_status(struct class *class, struct class_attribute *attr,
+//		char *buf){
+//	ssize_t length = 0;
+//	int res;
+//	struct vhost_fs_status_struct status;
+//
+//	vhost_printk("START\n");
+//	// print global attributes
+//	if (IS_ERR_VALUE(res = vhost_fs_show_all_class_attributes(class,
+//			vhost_fs_global_attrs,
+//			ARRAY_LENGTH(vhost_fs_global_attrs), buf + length))){
+//		return res;
+//	}
+//	length += res;
+//	vhost_printk("length = %ld\n", length);
+//	// print global workers attributes
+//	status.buf = buf + length;
+//	status.length = 0;
+//	status.attrs = vhost_fs_global_worker_attrs;
+//	status.attrs_count = ARRAY_LENGTH(vhost_fs_global_worker_attrs);
+//	if (IS_ERR_VALUE(res = vhost_fs_show_all_dir_attributes(vhost_fs_workers,
+//			&status))){
+//		return res;
+//	}
+//	length += status.length;
+//	vhost_printk("length = %ld\n", length);
+//	// print each worker attributes
+//	status.buf = buf + length;
+//	status.length = 0;
+//	status.attrs = vhost_fs_per_worker_attrs;
+//	status.attrs_count = ARRAY_LENGTH(vhost_fs_per_worker_attrs);
+//	if (IS_ERR_VALUE(res = device_for_each_child(vhost_fs_workers, &status,
+//			vhost_fs_show_all_dir_attributes))){
+//		return res;
+//	}
+//	length += status.length;
+//	vhost_printk("length = %ld\n", length);
+//	// print each device attributes
+//	status.buf = buf + length;
+//	status.length = 0;
+//	status.attrs = vhost_fs_device_attrs;
+//	status.attrs_count = ARRAY_LENGTH(vhost_fs_device_attrs);
+//	if (IS_ERR_VALUE(res = device_for_each_child(vhost_fs_devices, &status,
+//			vhost_fs_show_all_dir_attributes))){
+//		return res;
+//	}
+//	length += status.length;
+//	vhost_printk("length = %ld\n", length);
+//	// print each queue attributes
+//	status.buf = buf+length;
+//	status.length = 0;
+//	status.attrs = vhost_fs_queue_attrs;
+//	status.attrs_count = ARRAY_LENGTH(vhost_fs_queue_attrs);
+//	if (IS_ERR_VALUE(res = device_for_each_child(vhost_fs_queues, &status,
+//			vhost_fs_show_all_dir_attributes))){
+//		return res;
+//	}
+//	length += status.length;
+//
+//	vhost_printk("DONE! length = %ld\n", length);
+//	return length;
+//}
 
 ssize_t vhost_fs_get_recent_new_workers(struct device *dev,
 		struct device_attribute *attr, char *buf){
@@ -3510,12 +3502,12 @@ ssize_t vhost_fs_create_new_worker(struct device *dev,
 	int err;
 	vhost_printk("START\n");
 	if ((err = kstrtoint(buffer, 0, &res)) != 0){
-		vhost_printk("ERROR: getting int: %d.\n", err);
+		vhost_warn("Error: getting int: %d.\n", err);
 		return err;
 	}
 	if (res < -1 || res >= num_possible_cpus()){
 		/* invalid cpu number */
-		vhost_printk("ERROR: invalid cpu number, %d.\n", res);
+		vhost_warn("Error: invalid cpu number, %d.\n", res);
 		return -EINVAL;
 	}
 	create_new_worker(res, workers_pool.default_worker == NULL);
@@ -3526,27 +3518,31 @@ ssize_t vhost_fs_create_new_worker(struct device *dev,
 ssize_t vhost_fs_remove_worker(struct device *dev, struct device_attribute *attr,
 		 const char *buffer, size_t count){
 	struct vhost_worker *worker;
+	int num_devices;
+	int worker_id;
 	int err;
 	vhost_printk("START\n");
 	if ((err = vhost_fs_get_worker_from_string(buffer, count, &worker)) != 0){
-		vhost_printk("ERROR: getting worker: %d.\n", err);
+		vhost_warn("Error: getting worker: %d.\n", err);
 		return err;
 	}
+	worker_id = worker->id;
 	if (atomic_read(&worker->state) != VHOST_WORKER_STATE_LOCKED){
 		/* worker still is not set as locked. */
-		vhost_printk("ERROR: worker w.%d is not set as locked.\n", worker->id);
+		vhost_warn("Error: worker w.%d is not set as locked.\n", worker_id);
 		return -EINVAL;
 	}
-	if (atomic_read(&worker->num_devices) != 0){
-		vhost_printk("ERROR: worker w.%d is still assigned to %d device(s)\n",
-				worker->id, atomic_read(&worker->num_devices));
+	num_devices = atomic_read(&worker->num_devices);
+	if (num_devices != 0){
+		vhost_warn("Error: worker w.%d is still assigned to %d device(s)\n",
+				worker_id, num_devices);
 		/* worker still is still assigned to devices */
 		return -EINVAL;
 	}
 	if (vhost_worker_remove(worker) == 0){
 		/* worker still has some work to process in the work_list */
-		vhost_printk("ERROR: worker w.%d still has some work to process in the "
-				"work_list - BUG.\n", worker->id);
+		vhost_warn("Error: worker w.%d still has some work to process in the "
+				"work_list - BUG.\n", worker_id);
 		return -EINVAL;
 	}
 	vhost_printk("DONE: return value is %lu\n", count);
@@ -3582,7 +3578,7 @@ ssize_t vhost_fs_set_default_worker(struct device *dev,
 	}
 	if (!workers_pool_set_default_worker_safe(worker)){
 		/* worker is locked */
-		vhost_printk("ERROR: worker w.%d locked.\n", worker->id);
+		vhost_warn("Error: worker w.%d locked.\n", worker->id);
 		return -EINVAL;
 	}
 	vhost_printk("DONE: return value is %lu\n", count);
@@ -3607,17 +3603,17 @@ ssize_t vhost_fs_worker_set_locked(struct device *dev,
 	bool lock;
 	vhost_printk("START: worker %d\n", worker->id);
 	if ((err = strtobool(buffer, &lock))){
-		vhost_printk("ERROR: getting bool: %d.\n", err);
+		vhost_warn("Error: getting bool: %d.\n", err);
 		return err;
 	}
 	if (lock){
 		if (!vhost_worker_set_locked(worker)){
-			vhost_printk("ERROR: worker w.%d cannot set locked.\n", worker->id);
+			vhost_warn("Error: worker w.%d cannot set locked.\n", worker->id);
 			return -EINVAL;
 		}
 	}else{
 		if (!vhost_worker_set_unlocked(worker)){
-			vhost_printk("ERROR: worker w.%d cannot be unlocked.\n", worker->id);
+			vhost_warn("Error: worker w.%d cannot be unlocked.\n", worker->id);
 			return -EINVAL;
 		}
 	}
@@ -3685,7 +3681,7 @@ ssize_t vhost_fs_device_set_worker(struct device *dir,
 	int err;
 	vhost_printk("START: device d.%d\n", device->id);
 	if ((err = vhost_fs_get_worker_from_string(buffer, count, &worker)) != 0){
-		vhost_printk("ERROR: getting worker: "
+		vhost_warn("Error: getting worker: "
 				"%d.\n", err);
 		return err;
 	}
@@ -3695,7 +3691,7 @@ ssize_t vhost_fs_device_set_worker(struct device *dir,
 		return count;
 	}
 	if(vhost_dev_transfer_to_worker(device, worker) == 0){
-		vhost_printk("ERROR: device %d is already in transfer.\n", device->id);
+		vhost_warn("Error: device %d is already in transfer.\n", device->id);
 		return -EINVAL;
 	}
 	vhost_printk("DONE: return value is %lu\n",	count);
@@ -3749,7 +3745,7 @@ ssize_t vhost_fs_queue_set_poll(struct device *dir,
 	bool poll;
 	vhost_printk("START: %d.%d\n", vq->dev->id, vq->id);
 	if ((err = strtobool(buffer, &poll))){
-		vhost_printk("ERROR: getting bool: %d.\n", err);
+		vhost_warn("Error: getting bool: %d.\n", err);
 		return err;
 	}
 	if (poll){

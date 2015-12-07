@@ -392,6 +392,7 @@ static void handle_tx(struct vhost_net *net)
 		if (head == vq->num) {
 			if (unlikely(vhost_enable_notify(&net->dev, vq))) {
 				vhost_disable_notify(&net->dev, vq);
+				//vhost_printk("abelg: could not disable notifications - handle_tx\n");
 				continue;
 			}
 			break;
@@ -457,8 +458,12 @@ static void handle_tx(struct vhost_net *net)
 			vhost_zerocopy_signal_used(net, vq);
 		total_len += len;
 		vhost_net_tx_packet(net);
-		if (!vhost_can_continue(vq, total_len, VHOST_MIN_NET_WEIGHT, VHOST_MAX_NET_WEIGHT)) {
+		if (!vhost_can_continue(vq, total_len)) {
 			vq->stats.was_limited = 1;
+			/*
+			printk_ratelimited("abelg: total_len=%ld > VHOST_NET_WEIGHT=%d in handle_tx\n",
+				total_len, VHOST_NET_WEIGHT);
+			*/
 		if (vq->vqpoll.enabled)
 			vhost_enable_notify(&net->dev, vq);
 		else
@@ -672,7 +677,7 @@ static void handle_rx(struct vhost_net *net)
 		if (unlikely(vq_log))
 			vhost_log_write(vq, vq_log, log, vhost_len);
 		total_len += vhost_len;
-		if (!vhost_can_continue(vq, total_len, VHOST_MIN_NET_WEIGHT, VHOST_MAX_NET_WEIGHT)) {
+		if (!vhost_can_continue(vq, total_len)) {
 			vq->stats.was_limited = 1;
 			if (vq->vqpoll.enabled)
 				vhost_enable_notify(&net->dev, vq);
@@ -753,6 +758,11 @@ static int vhost_net_open(struct inode *inode, struct file *f)
 		n->vqs[i].sock_hlen = 0;
 	}
 	vhost_dev_init(dev, vqs, VHOST_NET_VQ_MAX);
+
+	for (i = 0; i < VHOST_NET_VQ_MAX; i++) {
+		vqs[i]->min_processed_data_limit = VHOST_MIN_NET_WEIGHT;
+		vqs[i]->max_processed_data_limit = VHOST_MAX_NET_WEIGHT;
+	}
 
 	vhost_poll_init(n->poll + VHOST_NET_VQ_TX, handle_tx_net, POLLOUT,
 			&n->vqs[VHOST_NET_VQ_TX].vq);
@@ -906,11 +916,14 @@ static struct socket *get_tap_socket(int fd)
 	if (!file)
 		return ERR_PTR(-EBADF);
 	sock = tun_get_socket(file);
-	if (!IS_ERR(sock))
+	if (!IS_ERR(sock)) {
+		vhost_printk("abelg: tun socket\n");
 		return sock;
+	}
 	sock = macvtap_get_socket(file);
 	if (IS_ERR(sock))
 		fput(file);
+	vhost_printk("abelg: macvtap socket\n");
 	return sock;
 }
 
@@ -922,8 +935,10 @@ static struct socket *get_socket(int fd)
 	if (fd == -1)
 		return NULL;
 	sock = get_raw_socket(fd);
-	if (!IS_ERR(sock))
+	if (!IS_ERR(sock)) {
+		vhost_printk("abelg: raw_socket\n");
 		return sock;
+	}
 	sock = get_tap_socket(fd);
 	if (!IS_ERR(sock))
 		return sock;
@@ -965,6 +980,8 @@ static long vhost_net_set_backend(struct vhost_net *n, unsigned index, int fd)
 	/* start polling new socket */
 	oldsock = vq->private_data;
 	if (sock != oldsock) {
+		vhost_printk("abelg: sock && vhost_sock_zcopy(sock)=%d\n",
+		       sock && vhost_sock_zcopy(sock));
 		ubufs = vhost_net_ubuf_alloc(vq,
 					     sock && vhost_sock_zcopy(sock));
 		if (IS_ERR(ubufs)) {
