@@ -2171,6 +2171,10 @@ bool vhost_dev_has_owner(struct vhost_dev *dev)
 EXPORT_SYMBOL_GPL(vhost_dev_has_owner);
 
 /* Caller should have device mutex */
+/*
+ *  yossiku: FIXME - the changes to this function to support shared
+ *  worker seems to be incomplete  
+*/
 long vhost_dev_set_owner(struct vhost_dev *dev)
 {
 	struct task_struct *worker;
@@ -3893,10 +3897,19 @@ ssize_t vhost_fs_worker_get_ksoftirq_time_clock_t(struct device *dev,
 ssize_t vhost_fs_worker_get_total_ksoftirqs(struct device *dev,
 		struct device_attribute *attr, char *buf){
 	ssize_t length = 0;
+	int cpu;
+	int irqs_sum = 0;
 	struct vhost_worker *worker = (struct vhost_worker *)dev_get_drvdata(dev);
-	vhost_printk("START: worker %d\n", worker->id);
-	length = sprintf(buf, "%d\n", kstat_cpu_irqs_sum(worker_get_cpu(worker)));
-	vhost_printk("DONE!\npage = %s length = %ld\n", buf, length);
+	
+	printk("*****START: worker %d\n", worker->id);
+	cpu = worker_get_cpu(worker);
+	if (cpu != -1){
+		printk("*****cpu %d\n", cpu);
+		// the worker is pinned to more then one CPU core.
+		irqs_sum = kstat_cpu_irqs_sum(cpu);
+	}
+	length = sprintf(buf, "%d\n", irqs_sum);
+	printk("*****DONE!\npage = %s length = %ld\n", buf, length);
 	return length;
 }
 
