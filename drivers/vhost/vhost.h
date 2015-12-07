@@ -181,9 +181,18 @@ struct vhost_virtqueue {
 		u64 handled_bytes; /* number of bytes handled by this queue in the last poll/notif. Must be updated by the concrete vhost implementations (vhost-net)*/
 		u64 was_limited; /* flag indicating if the queue was limited by net-weight during the last poll/notif. Must be updated by the concrete vhost implementations (vhost-net)*/
 		
-		u64 ksoftirq_occurences; /* number of times a softirq occured during the processing of this queue */
+		u64 ksoftirq_occurrences; /* number of times a softirq occured during the processing of this queue */
 		u64 ksoftirq_time; /* time (ns) that softirq occured during the processing of this queue */
 		u64 ksoftirqs; /* the number of softirq interruts handled during the processing of this queue */
+		
+		u64 handle_tx_calls;
+		u64 sendmsg_calls;
+
+		u64 aggregated_time_between_handle_tx_calls;
+		u64 aggregated_time_between_sendmsg_calls;
+
+		u64 last_handle_tx_call;
+		u64 last_sendmsg_call;
 	} stats;
 	struct {
 		/* When a virtqueue is in vqpoll.enabled mode, it declares
@@ -257,9 +266,7 @@ struct vhost_dev {
 	int id;
 	struct device *vhost_fs_dev;
 	struct{
-//#if 1 /* patchouli vhost-encrypted-blk */
 //		u64 encrypt_device; /* encrypt the content sent to the device, only available for blk */
-//#endif
 		u64 delay_per_work; /* the number of loops per work we have to delay the calculation. */
 		u64 delay_per_kbyte; /* the number of loops per kbyte we have to delay the calculation. */
 	} stats;
@@ -343,7 +350,7 @@ struct vhost_worker {
 		u64 notif_cycles; /* cycles spent handling works in notif mode */
 		u64 total_work_cycles; /* total cycles spent handling works */
 
-		u64 ksoftirq_occurences; /* number of times a softirq occured during worker work */
+		u64 ksoftirq_occurrences; /* number of times a softirq occured during worker work */
 		u64 ksoftirq_time; /* time (ns) that softirq process took while worker processed its work */
 		u64 ksoftirqs; /* the number of softirq interruts handled during worker processed its work */
 

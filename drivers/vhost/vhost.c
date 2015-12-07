@@ -237,8 +237,8 @@ static struct dev_ext_attribute vhost_fs_per_worker_attrs[] = {
 	/* Reading returns the number of softirq interruts handled during worker processed its work. */
 	VHOST_FS_WORKER_STAT_READONLY_ATTR(ksoftirqs, stats.ksoftirqs),	
 	/* Reading returns number of times a softirq occured during the worker's work. */
-	VHOST_FS_WORKER_STAT_READONLY_ATTR(ksoftirq_occurences, 
-		stats.ksoftirq_occurences),
+	VHOST_FS_WORKER_STAT_READONLY_ATTR(ksoftirq_occurrences, 
+		stats.ksoftirq_occurrences),
 	/* Reading returns the time (ns) that softirq process took while worker 
 	 * processed its work. */
 	VHOST_FS_WORKER_STAT_READONLY_ATTR(ksoftirq_time, 
@@ -428,12 +428,17 @@ static struct dev_ext_attribute vhost_fs_queue_attrs[] = {
 	/* Reading returns the number of softirq interruts handled during worker processed its work. */
 	VHOST_FS_QUEUE_STAT_READONLY_ATTR(ksoftirqs, stats.ksoftirqs),	
 	/* Reading returns number of times a softirq occured during the worker's work. */
-	VHOST_FS_QUEUE_STAT_READONLY_ATTR(ksoftirq_occurences, 
-		stats.ksoftirq_occurences),
+	VHOST_FS_QUEUE_STAT_READONLY_ATTR(ksoftirq_occurrences, 
+		stats.ksoftirq_occurrences),
 	/* Reading returns the time (ns) that softirq process took while worker 
 	 * processed its work. */
-	VHOST_FS_QUEUE_STAT_READONLY_ATTR(ksoftirq_time, stats.ksoftirq_time),
-
+	VHOST_FS_QUEUE_STAT_READONLY_ATTR(ksoftirq_time, stats.ksoftirq_time),	
+		VHOST_FS_QUEUE_STAT_READONLY_ATTR(handle_tx_calls, stats.handle_tx_calls),
+		VHOST_FS_QUEUE_STAT_READONLY_ATTR(sendmsg_calls, stats.sendmsg_calls),
+		VHOST_FS_QUEUE_STAT_READONLY_ATTR(aggregated_time_between_handle_tx_calls, stats.aggregated_time_between_handle_tx_calls),
+		VHOST_FS_QUEUE_STAT_READONLY_ATTR(aggregated_time_between_sendmsg_calls, stats.aggregated_time_between_sendmsg_calls),
+		VHOST_FS_QUEUE_STAT_READONLY_ATTR(last_handle_tx_call, stats.last_handle_tx_call),
+		VHOST_FS_QUEUE_STAT_READONLY_ATTR(last_sendmsg_call, stats.last_sendmsg_call),
 	/* Reading returns the id of the device this queue is contained in. */
 	{__ATTR(dev, S_IRUSR | S_IRGRP | S_IROTH, vhost_fs_queue_get_device, NULL),
 	NULL},
@@ -736,7 +741,7 @@ void vhost_poll_queue(struct vhost_poll *poll)
 EXPORT_SYMBOL_GPL(vhost_poll_queue);
 
 static atomic_t last_vqid = ATOMIC_INIT(0);
-#if 1 /* patchouli vhost-debug-info */
+#if 0 /* patchouli vhost-debug-info */
 #define  printk_vq(s, vq) 									\
 	do { 													\
 		 int devid = vq->dev->id; 							\
@@ -1165,11 +1170,11 @@ static int vhost_worker_thread(void *data)
 				softirq_diff_time = kcpustat_this_cpu->cpustat[CPUTIME_SOFTIRQ] - softirq_diff_time;
 				softirq_diff = kstat_cpu_irqs_sum(get_cpu()) - softirq_diff;
 				if (softirq_diff > 0){
-					worker->stats.ksoftirq_occurences++;
+					worker->stats.ksoftirq_occurrences++;
 					worker->stats.ksoftirq_time += softirq_diff_time;
 					worker->stats.ksoftirqs += softirq_diff;	
 
-					vq->stats.ksoftirq_occurences++;
+					vq->stats.ksoftirq_occurrences++;
 					vq->stats.ksoftirq_time += softirq_diff_time;
 					vq->stats.ksoftirqs += softirq_diff;			
 				}				
@@ -1218,11 +1223,11 @@ static int vhost_worker_thread(void *data)
 			softirq_diff_time = kcpustat_this_cpu->cpustat[CPUTIME_SOFTIRQ] - softirq_diff;
 			softirq_diff = kstat_cpu_irqs_sum(get_cpu()) - softirq_diff;
 			if (softirq_diff > 0){
-				worker->stats.ksoftirq_occurences++;
+				worker->stats.ksoftirq_occurrences++;
 				worker->stats.ksoftirq_time += softirq_diff_time;
 				worker->stats.ksoftirqs += softirq_diff;
 
-				vq->stats.ksoftirq_occurences++;
+				vq->stats.ksoftirq_occurrences++;
 				vq->stats.ksoftirq_time += softirq_diff_time;
 				vq->stats.ksoftirqs += softirq_diff;					
 			}				

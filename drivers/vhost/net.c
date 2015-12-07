@@ -442,6 +442,14 @@ static void handle_tx(struct vhost_net *net)
 
 		vhost_dev_add_delay_per_work(vq->dev);
 		vhost_dev_add_delay_per_kbyte(vq->dev, len);
+	if (vq->stats.sendmsg_calls > 0){
+		u64 start_tsc;
+
+		rdtscll(start_tsc);
+		vq->stats.aggregated_time_between_sendmsg_calls+= start_tsc - vq->stats.last_sendmsg_call;
+		vq->stats.last_sendmsg_call = start_tsc;
+	}
+	vq->stats.sendmsg_calls++;
 		err = sock->ops->sendmsg(NULL, sock, &msg, len);
 		if (unlikely(err < 0)) {
 			if (zcopy_used) {
@@ -474,6 +482,14 @@ static void handle_tx(struct vhost_net *net)
 		}
 	}
 	vq->stats.handled_bytes=total_len;
+	if (vq->stats.handle_tx_calls > 0){
+		u64 start_tsc;
+
+		rdtscll(start_tsc);
+		vq->stats.aggregated_time_between_handle_tx_calls+= start_tsc - vq->stats.last_handle_tx_call;
+		vq->stats.last_handle_tx_call = start_tsc;
+	}
+	vq->stats.handle_tx_calls++;
 
 out:
 	mutex_unlock(&vq->mutex);
