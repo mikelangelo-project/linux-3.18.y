@@ -180,6 +180,8 @@ struct vhost_virtqueue {
 		u64 last_poll_empty_tsc; /* tsc when the queue was detected empty for the first time */
 		u64 handled_bytes; /* number of bytes handled by this queue in the last poll/notif. Must be updated by the concrete vhost implementations (vhost-net)*/
 		u64 was_limited; /* flag indicating if the queue was limited by net-weight during the last poll/notif. Must be updated by the concrete vhost implementations (vhost-net)*/
+
+		u64 almost_full_times; /* the number of times the queue was almost full  */
 		
 		u64 ksoftirq_occurrences; /* number of times a softirq occured during the processing of this queue */
 		u64 ksoftirq_time; /* time (ns) that softirq occured during the processing of this queue */
@@ -239,6 +241,10 @@ struct vhost_virtqueue {
 		 * to avoid sending a lot of virtual interrupts to the guest.
 		 */
 		u64 min_poll_rate;
+
+		/* The number of pending items to consider the queue almost full.
+		 */
+		u32 max_almost_full_pending_items;
 		/* virtqueue.avail is a userspace pointer, and each vhost
 		 * device may have a different process context, so polling
 		 * different vhost devices could involve page-table switches
