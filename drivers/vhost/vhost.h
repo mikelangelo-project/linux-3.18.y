@@ -18,8 +18,10 @@
 
 #define vhost_warn(msg, ...) \
 	WARN(0, "vhost-debug: %s:%d: "msg"\n", __FUNCTION__, __LINE__, ##__VA_ARGS__)
+
 #define vhost_printk(msg, ...) \
 	printk("vhost-debug: %s:%d: "msg"\n", __FUNCTION__, __LINE__, ##__VA_ARGS__)
+
 
 struct vhost_device;
 struct vhost_work;
@@ -199,13 +201,9 @@ struct vhost_virtqueue {
 		 * so vqpoll should not be re-enabled.
 		 */
 		bool shutdown;
-		/* how many items were pending the last time we checked if it was stuck */
+		/* The number of items that were pending the last time we checked if it
+		 * this virtual queue is stuck */
 		u32 last_pending_items;
-		
-		/* TSC when we detected for the first time the queue had work
-		   Used to measure how many cycles the queue work has been waiting
-		 */
-		u64 arrival_tsc;
 
 		/* TSC when we detected for the first time the queue was stuck
 		   Used to measure how many cycles the queue has been stuck
@@ -336,6 +334,7 @@ struct vhost_worker {
 		u64 pending_works; /* number of pending works */
 
 		u64 last_loop_tsc_end; /* tsc when the last loop was performed */
+
 	} stats;
 	struct list_head vqpoll_list;
 	/* The maximum number of cycles a worker disable software interrupts while

@@ -27,7 +27,6 @@
 #include <linux/module.h>
 #include <linux/jiffies.h>
 #include <linux/module.h>
-
 #include "vhost.h"
 #include <linux/string.h>
 #include <linux/sched.h>
@@ -210,6 +209,7 @@ DECLARE_VHOST_FS_SHOW(vhost_fs_worker_get_cpu);
 DECLARE_VHOST_FS_SHOW(vhost_fs_worker_get_pid);
 DECLARE_VHOST_FS_SHOW(vhost_fs_worker_get_dev_list);
 
+
 /* per worker attributes */
 static struct dev_ext_attribute vhost_fs_per_worker_attrs[] = {
 	/* Reading returns the number of loops performed by the worker. */
@@ -259,10 +259,12 @@ static struct dev_ext_attribute vhost_fs_per_worker_attrs[] = {
 	{__ATTR(cpu, S_IRUSR| S_IRGRP | S_IROTH,
 			vhost_fs_worker_get_cpu, NULL), NULL},
 	/* Reading returns the process id of the worker. */
-	{__ATTR(pid, S_IRUSR| S_IRGRP | S_IROTH, vhost_fs_worker_get_pid, NULL), NULL},
+	{__ATTR(pid, S_IRUSR| S_IRGRP | S_IROTH, vhost_fs_worker_get_pid, NULL),
+			NULL},
 	 /* Reading returns a '\n' separated list of ids of devices assigned to
 	  * this worker. */
-	{__ATTR(dev_list, S_IRUSR | S_IRGRP | S_IROTH, vhost_fs_worker_get_dev_list, NULL), NULL}
+	{__ATTR(dev_list, S_IRUSR | S_IRGRP | S_IROTH, vhost_fs_worker_get_dev_list,
+			NULL), NULL},
 };
 
 DECLARE_VHOST_FS_SHOW(vhost_fs_device_get_worker);
@@ -287,7 +289,7 @@ static struct dev_ext_attribute vhost_fs_device_attrs[] = {
 //	/* Writing 1/0 starts/stops device encryption
 //	 * Reading returns the current value. */
 //	{__ATTR(encrypt_dev,
-//			S_IWUSR | S_IRUSR | S_IWGRP | S_IRGRP | S_IWOTH | S_IROTH,
+//			S_IWUSR | S_IRUSR | S_IWGRP | S_IRGRP | S_IROTH,
 //			vhost_fs_device_get_encrypt_dev, vhost_fs_device_set_encrypt_dev),
 //			NULL},
 
@@ -297,7 +299,7 @@ static struct dev_ext_attribute vhost_fs_device_attrs[] = {
 			vhost_fs_device_set_delay_per_work), NULL},
 
 	{__ATTR(delay_per_kbyte,
-			S_IWUSR | S_IRUSR | S_IWGRP | S_IRGRP | S_IWOTH | S_IROTH,
+			S_IWUSR | S_IRUSR | S_IWGRP | S_IRGRP | S_IROTH,
 			vhost_fs_device_get_delay_per_kbyte,
 			vhost_fs_device_set_delay_per_kbyte), NULL},
 
@@ -447,6 +449,7 @@ enum {
 };
 
 static struct vhost_workers_pool workers_pool;
+
 
 static struct vhost_dev_table dev_table;
 
@@ -839,7 +842,6 @@ static void vhost_vq_reset(struct vhost_dev *dev,
 	vq->vqpoll.avail_mapped = NULL;
 	vq->vqpoll.max_stuck_cycles = virtual_queue_default_max_stuck_cycles;
 	vq->vqpoll.max_stuck_pending_items = virtual_queue_default_max_stuck_pending_items;
-	vq->vqpoll.arrival_tsc = 0;
 	vq->vqpoll.last_pending_items = 0;
 	vq->min_processed_data_limit = 1500;
 	vq->max_processed_data_limit = 524288;
@@ -889,7 +891,6 @@ static struct vhost_virtqueue *roundrobin_poll(struct list_head *list) {
 			continue;
 		}
 		vq->vqpoll.last_pending_items = pending_items;
-		vq->vqpoll.arrival_tsc = tsc;
 	}
 
 	vq = list_first_entry(list, struct vhost_virtqueue, vqpoll.link);
@@ -996,12 +997,18 @@ bool vhost_can_continue(struct vhost_virtqueue  *vq,
 			continue;
 		}
 
+		elapsed_cycles = cycles - vq_iterator->vqpoll.stuck_cycles;
+		vhost_printk("vq.%d.%d: elapsed_cycles:%llu\n", vq_id,
+					 vq_iterator->dev->id, elapsed_cycles);
+
 		// check if the queue stuck with pending data since the last check (?)
 		if (pending_items != vq_iterator->vqpoll.last_pending_items) {
+			// calculate the pending cycles (per work)
+			vq_iterator->stats.poll_pending_cycles +=
+					elapsed_cycles * pending_items;
 			// the queue is not stuck, reset stuck
 			vq_iterator->vqpoll.last_pending_items = pending_items;
 			vq_iterator->vqpoll.stuck_cycles = cycles;
-			vq_iterator->vqpoll.arrival_tsc = cycles;
 			vhost_printk("the queue is not stuck, reset stuck.");
 			continue;
 		}
@@ -1014,9 +1021,7 @@ bool vhost_can_continue(struct vhost_virtqueue  *vq,
 			continue;
 		}
 
-		elapsed_cycles = cycles - vq_iterator->vqpoll.stuck_cycles;
-		vhost_printk("vq.%d.%d: elapsed_cycles:%llu\n", vq_id,
-					 vq_iterator->dev->id, elapsed_cycles);
+
 		// is the queue stuck for too long ?
 		if (elapsed_cycles >= vq_iterator->vqpoll.max_stuck_cycles) {
 			// put current queue in the 2nd place if it didn't send more than half of the max
@@ -1544,7 +1549,7 @@ static int vhost_worker_remove_unsafe(struct vhost_worker *worker){
 	vhost_worker_flush_work(&shutdown.work);
 	vhost_printk("\n");
 
-	/* cleanup worker */
+	/* cleanup worker */	
 	spin_lock_irq(&workers_pool.workers_lock);
 	vhost_printk("\n");
 	worker->worker_thread = NULL;
