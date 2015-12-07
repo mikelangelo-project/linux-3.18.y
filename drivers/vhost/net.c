@@ -414,7 +414,6 @@ static void handle_tx(struct vhost_net *net)
 			break;
 		}
 
-		vhost_dev_add_delay(vq->dev);
 		zcopy_used = zcopy && len >= VHOST_GOODCOPY_LEN
 				   && (nvq->upend_idx + 1) % UIO_MAXIOV !=
 				      nvq->done_idx
@@ -440,6 +439,9 @@ static void handle_tx(struct vhost_net *net)
 			ubufs = NULL;
 		}
 		/* TODO: Check specific error and bomb out unless ENOBUFS? */
+
+		vhost_dev_add_delay_per_work(vq->dev);
+		vhost_dev_add_delay_per_kbyte(vq->dev, len);
 		err = sock->ops->sendmsg(NULL, sock, &msg, len);
 		if (unlikely(err < 0)) {
 			if (zcopy_used) {

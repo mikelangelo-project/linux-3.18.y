@@ -273,6 +273,10 @@ DECLARE_VHOST_FS_SHOW(vhost_fs_device_get_vq_list);
 //DECLARE_VHOST_FS_STORE(vhost_fs_device_set_encrypt_dev);
 DECLARE_VHOST_FS_SHOW(vhost_fs_device_get_delay_per_work);
 DECLARE_VHOST_FS_STORE(vhost_fs_device_set_delay_per_work);
+
+DECLARE_VHOST_FS_SHOW(vhost_fs_device_get_delay_per_kbyte);
+DECLARE_VHOST_FS_STORE(vhost_fs_device_set_delay_per_kbyte);
+
 /* device attributes */
 static struct dev_ext_attribute vhost_fs_device_attrs[] = {
 	/* Writing a worker id transfers a device from its current worker to the
@@ -291,6 +295,11 @@ static struct dev_ext_attribute vhost_fs_device_attrs[] = {
 			S_IWUSR | S_IRUSR | S_IWGRP | S_IRGRP | S_IROTH,
 			vhost_fs_device_get_delay_per_work,
 			vhost_fs_device_set_delay_per_work), NULL},
+
+	{__ATTR(delay_per_kbyte,
+			S_IWUSR | S_IRUSR | S_IWGRP | S_IRGRP | S_IWOTH | S_IROTH,
+			vhost_fs_device_get_delay_per_kbyte,
+			vhost_fs_device_set_delay_per_kbyte), NULL},
 
 	/* Reading returns the pid of the owner thread. */
 	{__ATTR(owner, S_IRUSR | S_IRGRP | S_IROTH, vhost_fs_device_get_owner, NULL), NULL},
@@ -687,6 +696,7 @@ void vhost_poll_queue(struct vhost_poll *poll)
 EXPORT_SYMBOL_GPL(vhost_poll_queue);
 
 static atomic_t last_vqid = ATOMIC_INIT(0);
+#if 1 /* patchouli vhost-debug-info */
 #define  printk_vq(s, vq) 									\
 	do { 													\
 		 int devid = vq->dev->id; 							\
@@ -695,6 +705,10 @@ static atomic_t last_vqid = ATOMIC_INIT(0);
 		 vhost_printk("%s on virtqueue %d/%d (worker %d)\n", \
 				     s, devid, vqid, workerid); 			\
 	}while(0);
+#else
+	#define printk_vq(s, vq)
+#endif
+
 
 /* Enable or disable virtqueue polling (vqpoll.enabled) for a virtqueue.
  *
@@ -3807,6 +3821,31 @@ static ssize_t vhost_fs_device_set_delay_per_work(struct device *dir,
 		return err;
 	}
 	dev->stats.delay_per_work = value;
+	vhost_printk("DONE: return value is %lu\n",	count);
+	return count;
+}
+
+static ssize_t vhost_fs_device_get_delay_per_kbyte(struct device *dir,
+		struct device_attribute *attr, char *buf){
+	ssize_t length = 0;
+	struct vhost_dev *dev = (struct vhost_dev *)dev_get_drvdata(dir);
+	vhost_printk("START: dev d.%d\n", dev->id);
+	length = sprintf(buf, "%llu\n", dev->stats.delay_per_kbyte);
+	vhost_printk("DONE!\npage = %s length = %ld\n", buf, length);
+	return length;
+}
+
+static ssize_t vhost_fs_device_set_delay_per_kbyte(struct device *dir,
+		struct device_attribute *attr, const char *buffer, size_t count){
+	struct vhost_dev *dev = (struct vhost_dev *)dev_get_drvdata(dir);
+	u64 value;
+	int err;
+	vhost_printk("START: device d.%d\n", dev->id);
+	if ((err = kstrtoull(buffer, 0, &value)) != 0){
+		vhost_warn("Error: getting value: %d.\n", err);
+		return err;
+	}
+	dev->stats.delay_per_kbyte = value;
 	vhost_printk("DONE: return value is %lu\n",	count);
 	return count;
 }

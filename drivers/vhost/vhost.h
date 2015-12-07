@@ -258,9 +258,8 @@ struct vhost_dev {
 //#if 1 /* patchouli vhost-encrypted-blk */
 //		u64 encrypt_device; /* encrypt the content sent to the device, only available for blk */
 //#endif
-#if 1 /* patchouli vhost-delay-per-work */
 		u64 delay_per_work; /* the number of loops per work we have to delay the calculation. */
-#endif
+		u64 delay_per_kbyte; /* the number of loops per kbyte we have to delay the calculation. */
 	} stats;
 	struct{
 		/* The device operation mode. has two operation modes.
@@ -392,7 +391,9 @@ void vhost_dev_reset_owner(struct vhost_dev *, struct vhost_memory *);
 void vhost_dev_cleanup(struct vhost_dev *, bool locked);
 void vhost_dev_stop(struct vhost_dev *);
 long vhost_dev_ioctl(struct vhost_dev *, unsigned int ioctl, void __user *argp);
-#define vhost_dev_add_delay(dev) __delay((dev)->stats.delay_per_work)
+#define vhost_dev_add_delay_per_work(dev) __delay((dev)->stats.delay_per_work)
+#define vhost_dev_add_delay_per_kbyte(dev, len) \
+	__delay((dev)->stats.delay_per_kbyte * (len << 10))
 long vhost_vring_ioctl(struct vhost_dev *d, int ioctl, void __user *argp);
 int vhost_vq_access_ok(struct vhost_virtqueue *vq);
 int vhost_log_access_ok(struct vhost_dev *);

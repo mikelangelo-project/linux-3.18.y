@@ -29,14 +29,14 @@
 #include <linux/idr.h>
 //#include <linux/crypto.h>
 //#include <asm/scatterlist.h>
-//
-//#define FILL_SG(sg,ptr,len)	\
-//	do { \
-//		(sg)->page = virt_to_page(ptr); \
-//		(sg)->offset = offset_in_page(ptr); \
-//		(sg)->length = len; \
-//	} while (0)
-//
+/*
+#define FILL_SG(sg,ptr,len) \
+	do { \
+		(sg)->page = virt_to_page(ptr); \
+		(sg)->offset = offset_in_page(ptr); \
+		(sg)->length = len; \
+	} while (0)
+*/
 ///* config options */
 //char *algo = "aes";
 //int mode = CRYPTO_TFM_MODE_CBC;
@@ -349,7 +349,8 @@ static int vhost_blk_req_handle(struct vhost_virtqueue *vq,
 
 	req->len	= iov_length(vq->iov, out + in) - sizeof(status);
 
-	vhost_dev_add_delay(vq->dev);
+	vhost_dev_add_delay_per_work(vq->dev);
+	vhost_dev_add_delay_per_kbyte(vq->dev, req->len);
 
 	req->iov_nr	= move_iovec(vq->iov, req->iov, req->len, out + in);
 
