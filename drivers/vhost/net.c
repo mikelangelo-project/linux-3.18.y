@@ -414,6 +414,7 @@ static void handle_tx(struct vhost_net *net)
 			break;
 		}
 
+		vhost_dev_add_delay(vq->dev);
 		zcopy_used = zcopy && len >= VHOST_GOODCOPY_LEN
 				   && (nvq->upend_idx + 1) % UIO_MAXIOV !=
 				      nvq->done_idx
@@ -450,8 +451,7 @@ static void handle_tx(struct vhost_net *net)
 			break;
 		}
 		if (err != len)
-			pr_debug("Truncated TX packet: "
-				 " len %d != %zd\n", err, len);
+			pr_debug("Truncated TX packet: len %d != %zd\n", err, len);
 		if (!zcopy_used)
 			vhost_add_used_and_signal(&net->dev, vq, head, 0);
 		else

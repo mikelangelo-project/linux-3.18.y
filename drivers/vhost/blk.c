@@ -27,6 +27,24 @@
 #include "vhost.h"
 #include "blk.h"
 #include <linux/idr.h>
+//#include <linux/crypto.h>
+//#include <asm/scatterlist.h>
+//
+//#define FILL_SG(sg,ptr,len)	\
+//	do { \
+//		(sg)->page = virt_to_page(ptr); \
+//		(sg)->offset = offset_in_page(ptr); \
+//		(sg)->length = len; \
+//	} while (0)
+//
+///* config options */
+//char *algo = "aes";
+//int mode = CRYPTO_TFM_MODE_CBC;
+//char key[16], iv[16];
+//
+///* local variables */
+//struct crypto_tfm *tfm;
+//
 
 static DEFINE_IDA(vhost_blk_index_ida);
 
@@ -330,10 +348,12 @@ static int vhost_blk_req_handle(struct vhost_virtqueue *vq,
 	req->iov	= blk->iov;
 
 	req->len	= iov_length(vq->iov, out + in) - sizeof(status);
+
+	vhost_dev_add_delay(vq->dev);
+
 	req->iov_nr	= move_iovec(vq->iov, req->iov, req->len, out + in);
 
 	move_iovec(vq->iov, req->status, sizeof(status), out + in);
-
 	switch (hdr->type) {
 	case VIRTIO_BLK_T_OUT:
 		req->write = WRITE;
@@ -348,8 +368,7 @@ static int vhost_blk_req_handle(struct vhost_virtqueue *vq,
 		ret = vhost_blk_req_submit(req, file);
 		break;
 	case VIRTIO_BLK_T_GET_ID:
-		ret = snprintf(id, VIRTIO_BLK_ID_BYTES,
-			       "vhost-blk%d", blk->index);
+		ret = snprintf(id, VIRTIO_BLK_ID_BYTES, "vhost-blk%d", blk->index);
 		if (ret < 0)
 			break;
 		len = ret;
@@ -429,7 +448,6 @@ static void vhost_blk_handle_guest_kick(struct vhost_work *work)
 /* Host kick us for I/O completion */
 static void vhost_blk_handle_host_kick(struct vhost_work *work)
 {
-
 	struct vhost_virtqueue *vq;
 	struct vhost_blk_req *req;
 	struct llist_node *llnode;
@@ -453,6 +471,9 @@ static void vhost_blk_handle_host_kick(struct vhost_work *work)
 		ret = vhost_blk_set_status(req, status);
 		if (unlikely(ret))
 			continue;
+
+		vq->stats.handled_bytes=req->len;
+
 		vhost_add_used(&blk->vq, req->head, req->len);
 		added = true;
 
@@ -775,6 +796,21 @@ static struct miscdevice vhost_blk_misc = {
 
 static int vhost_blk_init(void)
 {
+//	memset(key, 0, sizeof(key));
+//	memset(iv, 0, sizeof(iv));
+//
+//	tfm = crypto_alloc_tfm (algo, mode);
+//
+//	if (tfm == NULL) {
+//		vhost_warn("failed to load transform for %s %s\n", algo,
+//				mode == CRYPTO_TFM_MODE_CBC ? "CBC" : "");
+//	}
+//
+//	if (crypto_cipher_setkey(tfm, key, sizeof(key))) {
+//		vhost_warn(KERN_ERR PFX "setkey() failed flags=%x\n", tfm->crt_flags);
+//	}
+//
+//	crypto_cipher_set_iv(tfm, iv, crypto_tfm_alg_ivsize (tfm));
 	return misc_register(&vhost_blk_misc);
 }
 

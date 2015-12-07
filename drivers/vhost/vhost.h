@@ -13,9 +13,8 @@
 #include <linux/virtio_blk.h>
 #include <linux/virtio_net.h>
 #include <linux/atomic.h>
-#if 1 /* patchouli vhost-statistics */
 #include <linux/device.h>
-#endif
+#include <linux/delay.h>
 
 #define vhost_warn(msg, ...) \
 	WARN(0, "vhost-debug: %s:%d: "msg"\n", __FUNCTION__, __LINE__, ##__VA_ARGS__)
@@ -53,6 +52,7 @@ struct vhost_work {
 	 */
 	struct vhost_virtqueue    *vq;
 	spinlock_t lock;
+	u64 arrival_cycles;
 };
 
 /* Poll a file (eventfd or socket) */
@@ -161,14 +161,11 @@ struct vhost_virtqueue {
 		u64 poll_empty_cycles; /* number of cycles elapsed while the queue was empty */
 		u64 poll_coalesced; /* number of times this queue was coalesced */
 		u64 poll_limited; /* number of times the queue was limited by netweight during poll kicks*/
-		u64 poll_aggregated_wait_cycles; /* The total amount of cycles all the
-											work items in the ring buffer waited
-											for service. */
-		
+		u64 poll_pending_cycles; /* cycles elapsed between item arrival and poll */
 		u64 notif_works; /* number of works in notif mode */
 		u64 notif_cycles; /* cycles spent handling works in notif mode */
 		u64 notif_bytes; /* bytes sent/received by works in notif mode */
-		u64 notif_wait; /* cycles elapsed between works in notif mode */
+		u64 notif_wait; /* cycles elapsed between work arrival and handling in notif mode */
 		u64 notif_limited; /* number of times the queue was limited by netweight in notif mode */
 
 		u64 ring_full; /* number of times the ring was full */
@@ -205,6 +202,11 @@ struct vhost_virtqueue {
 		/* how many items were pending the last time we checked if it was stuck */
 		u32 last_pending_items;
 		
+		/* TSC when we detected for the first time the queue had work
+		   Used to measure how many cycles the queue work has been waiting
+		 */
+		u64 arrival_tsc;
+
 		/* TSC when we detected for the first time the queue was stuck
 		   Used to measure how many cycles the queue has been stuck
 		 */
@@ -253,6 +255,12 @@ struct vhost_dev {
 	int id;
 	struct device *vhost_fs_dev;
 	struct{
+//#if 1 /* patchouli vhost-encrypted-blk */
+//		u64 encrypt_device; /* encrypt the content sent to the device, only available for blk */
+//#endif
+#if 1 /* patchouli vhost-delay-per-work */
+		u64 delay_per_work; /* the number of loops per work we have to delay the calculation. */
+#endif
 	} stats;
 	struct{
 		/* The device operation mode. has two operation modes.
@@ -326,7 +334,7 @@ struct vhost_worker {
 		u64 empty_polls; /* number of times there were no queues to poll and the polling queue was not empty  */
 		u64 stuck_works; /* number of times were detected stuck and limited queues */
 		u64 noqueue_works; /* number of works which have no queue related to them (e.g. vhost-net rx) */
-		u64 pending_works; /* number of pending works */;
+		u64 pending_works; /* number of pending works */
 
 		u64 last_loop_tsc_end; /* tsc when the last loop was performed */
 	} stats;
@@ -384,6 +392,7 @@ void vhost_dev_reset_owner(struct vhost_dev *, struct vhost_memory *);
 void vhost_dev_cleanup(struct vhost_dev *, bool locked);
 void vhost_dev_stop(struct vhost_dev *);
 long vhost_dev_ioctl(struct vhost_dev *, unsigned int ioctl, void __user *argp);
+#define vhost_dev_add_delay(dev) __delay((dev)->stats.delay_per_work)
 long vhost_vring_ioctl(struct vhost_dev *d, int ioctl, void __user *argp);
 int vhost_vq_access_ok(struct vhost_virtqueue *vq);
 int vhost_log_access_ok(struct vhost_dev *);
