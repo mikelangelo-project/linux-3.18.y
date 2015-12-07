@@ -180,6 +180,10 @@ struct vhost_virtqueue {
 		u64 last_poll_empty_tsc; /* tsc when the queue was detected empty for the first time */
 		u64 handled_bytes; /* number of bytes handled by this queue in the last poll/notif. Must be updated by the concrete vhost implementations (vhost-net)*/
 		u64 was_limited; /* flag indicating if the queue was limited by net-weight during the last poll/notif. Must be updated by the concrete vhost implementations (vhost-net)*/
+		
+		u64 ksoftirq_occurences; /* number of times a softirq occured during the processing of this queue */
+		u64 ksoftirq_time; /* time (ns) that softirq occured during the processing of this queue */
+		u64 ksoftirqs; /* the number of softirq interruts handled during the processing of this queue */
 	} stats;
 	struct {
 		/* When a virtqueue is in vqpoll.enabled mode, it declares
@@ -225,7 +229,7 @@ struct vhost_virtqueue {
 		 * Note: This is designed for non-latency sensitive queues, when we want
 		 * to avoid sending a lot of virtual interrupts to the guest.
 		 */
-		int min_poll_rate;
+		u64 min_poll_rate;
 		/* virtqueue.avail is a userspace pointer, and each vhost
 		 * device may have a different process context, so polling
 		 * different vhost devices could involve page-table switches
@@ -334,6 +338,14 @@ struct vhost_worker {
 		u64 pending_works; /* number of pending works */
 
 		u64 last_loop_tsc_end; /* tsc when the last loop was performed */
+
+		u64 poll_cycles; /* cycles spent handling kicks in poll mode */		
+		u64 notif_cycles; /* cycles spent handling works in notif mode */
+		u64 total_work_cycles; /* total cycles spent handling works */
+
+		u64 ksoftirq_occurences; /* number of times a softirq occured during worker work */
+		u64 ksoftirq_time; /* time (ns) that softirq process took while worker processed its work */
+		u64 ksoftirqs; /* the number of softirq interruts handled during worker processed its work */
 
 	} stats;
 	struct list_head vqpoll_list;

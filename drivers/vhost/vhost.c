@@ -32,6 +32,7 @@
 #include <linux/sched.h>
 #include <linux/cpuset.h>
 #include <linux/moduleparam.h>
+#include <linux/kernel_stat.h>
 #define MODULE_NAME "vhost"
 
 static int virtual_queue_default_min_poll_rate = 0;
@@ -66,6 +67,7 @@ MODULE_PARM_DESC(worker_default_max_disabled_soft_interrupts_cycles ,
 		"processing virtio queues.");
 
 
+
 static struct class *vhost_fs_class;
 static struct device *vhost_fs_workers;
 static struct device *vhost_fs_devices;
@@ -74,7 +76,6 @@ static struct device *vhost_fs_queues;
 #define VHOST_FS_DIRECTORY_WORKER "worker"
 #define VHOST_FS_DIRECTORY_DEVICE "dev"
 #define VHOST_FS_DIRECTORY_VIRTUAL_QUEUE "vq"
-
 
 #define ARRAY_LENGTH(x)  (sizeof(x) / sizeof(x[0]))
 
@@ -206,6 +207,8 @@ static struct dev_ext_attribute vhost_fs_global_worker_attrs[] = {
 DECLARE_VHOST_FS_SHOW(vhost_fs_worker_get_locked);
 DECLARE_VHOST_FS_STORE(vhost_fs_worker_set_locked);
 DECLARE_VHOST_FS_SHOW(vhost_fs_worker_get_cpu);
+DECLARE_VHOST_FS_SHOW(vhost_fs_worker_get_ksoftirq_time_clock_t);
+DECLARE_VHOST_FS_SHOW(vhost_fs_worker_get_total_ksoftirqs);
 DECLARE_VHOST_FS_SHOW(vhost_fs_worker_get_pid);
 DECLARE_VHOST_FS_SHOW(vhost_fs_worker_get_dev_list);
 
@@ -221,6 +224,32 @@ static struct dev_ext_attribute vhost_fs_per_worker_attrs[] = {
 	/* Reading returns the cycles spent in the worker, excluding cycles
 	 * doing queue work. */
 	VHOST_FS_WORKER_STAT_READONLY_ATTR(cycles, stats.cycles),
+	/* Reading returns the cycles spent in the workerhandling kicks in 
+	 * poll mode. */
+	VHOST_FS_WORKER_STAT_READONLY_ATTR(poll_cycles, stats.poll_cycles),
+	/* Reading returns the cycles spent in the worker handling works 
+	 * in notif mode. */
+	VHOST_FS_WORKER_STAT_READONLY_ATTR(notif_cycles, stats.notif_cycles),
+	/* Reading returns the cycles spent in the worker handling works 
+	 * in any mode. */
+	VHOST_FS_WORKER_STAT_READONLY_ATTR(total_work_cycles, 
+		stats.total_work_cycles),
+	/* Reading returns the number of softirq interruts handled during worker processed its work. */
+	VHOST_FS_WORKER_STAT_READONLY_ATTR(ksoftirqs, stats.ksoftirqs),	
+	/* Reading returns number of times a softirq occured during the worker's work. */
+	VHOST_FS_WORKER_STAT_READONLY_ATTR(ksoftirq_occurences, 
+		stats.ksoftirq_occurences),
+	/* Reading returns the time (ns) that softirq process took while worker 
+	 * processed its work. */
+	VHOST_FS_WORKER_STAT_READONLY_ATTR(ksoftirq_time, 
+		stats.ksoftirq_time),
+	/* Reading returns the time (clock ticks) that softirq process took while worker 
+	 * processed its work. */
+	{__ATTR(ksoftirq_time_clock_t, S_IRUSR| S_IRGRP | S_IROTH,
+			vhost_fs_worker_get_ksoftirq_time_clock_t, NULL), NULL},
+	/* Reading returns the total number of softirq interruts on this cpu since boot. */
+	{__ATTR(total_softirqs, S_IRUSR| S_IRGRP | S_IROTH,
+			vhost_fs_worker_get_total_ksoftirqs, NULL), NULL},
 	/* Reading returns the number of times the mm was switched. */
 	VHOST_FS_WORKER_STAT_READONLY_ATTR(mm_switches, stats.mm_switches),
 	/* number of cycles the worker thread was not running after schedule. */
@@ -391,11 +420,19 @@ static struct dev_ext_attribute vhost_fs_queue_attrs[] = {
 	/* Writing sets the minimum rate in which a polled queue can be polled
 	 * (disable = 0).
 	 * Reading returns the current value. */
-	VHOST_FS_QUEUE_STAT_READONLY_ATTR(min_poll_rate, vqpoll.min_poll_rate),
+	VHOST_FS_QUEUE_STAT_ATTR(min_poll_rate, vqpoll.min_poll_rate),
 
 	/* Reading returns 1 if the queue can be polled, 0 otherwise. */
 	{__ATTR(can_poll, S_IRUSR | S_IRGRP | S_IROTH, vhost_fs_queue_get_can_poll, NULL),
 	NULL},
+	/* Reading returns the number of softirq interruts handled during worker processed its work. */
+	VHOST_FS_QUEUE_STAT_READONLY_ATTR(ksoftirqs, stats.ksoftirqs),	
+	/* Reading returns number of times a softirq occured during the worker's work. */
+	VHOST_FS_QUEUE_STAT_READONLY_ATTR(ksoftirq_occurences, 
+		stats.ksoftirq_occurences),
+	/* Reading returns the time (ns) that softirq process took while worker 
+	 * processed its work. */
+	VHOST_FS_QUEUE_STAT_READONLY_ATTR(ksoftirq_time, stats.ksoftirq_time),
 
 	/* Reading returns the id of the device this queue is contained in. */
 	{__ATTR(dev, S_IRUSR | S_IRGRP | S_IROTH, vhost_fs_queue_get_device, NULL),
@@ -705,7 +742,7 @@ static atomic_t last_vqid = ATOMIC_INIT(0);
 		 int devid = vq->dev->id; 							\
 		 int vqid = vq->id;									\
 		 int workerid = vq->dev->worker->id;				\
-		 vhost_printk("%s on virtqueue %d/%d (worker %d)\n", \
+		 vhost_printk("%s on virtqueue %d.%d (worker %d)\n", \
 				     s, devid, vqid, workerid); 			\
 	}while(0);
 #else
@@ -876,6 +913,7 @@ static struct vhost_virtqueue *roundrobin_poll(struct list_head *list) {
 	u64 tsc;
 	int pending_items;
 
+	// vhost_printk("START");
 	if (list_empty(list)){
 		return NULL;
 	}
@@ -897,14 +935,19 @@ static struct vhost_virtqueue *roundrobin_poll(struct list_head *list) {
 	WARN_ON(!vq->vqpoll.enabled);
 	list_move_tail(&vq->vqpoll.link, list);
 	WARN_ON(list_empty(list));
-
+	
 	/* If poll_coalescing_rate is set, avoid kicking the same vq too often */
+	// vhost_printk("before coalesing");
 	if (vq->vqpoll.min_poll_rate > 0) {
-		if (vq->vqpoll.min_poll_rate < tsc - vq->stats.last_poll_tsc_end){
+		if (vq->vqpoll.min_poll_rate > tsc - vq->stats.last_poll_tsc_end){
+			// vhost_printk("coalesing: min_poll_rate: %llu, tsc: %llu, last_poll_tsc_end: %llu, d: %llu", 
+			// 	vq->vqpoll.min_poll_rate, tsc, vq->stats.last_poll_tsc_end, 
+			// 	tsc - vq->stats.last_poll_tsc_end);
 			vq->stats.poll_coalesced++;
 			return NULL;
 		}
 	}
+	// vhost_printk("after coalesing");
 	/* See if there is any new work available from the guest. */
 	/* TODO: need to check the optional idx feature, and if we haven't
 	 * reached that idx yet, don't kick... */
@@ -1107,15 +1150,33 @@ static int vhost_worker_thread(void *data)
 			struct vhost_virtqueue *vq = work->vq;
 			__set_current_state(TASK_RUNNING);
 			if (vq) {
+				u64 softirq_diff_time = 0;
+				u64 softirq_diff = 0;
 				set_mm(vq);
 				if (vq->avail && (vq->last_avail_idx == vq->avail->idx+1))
 					vq->stats.ring_full++;
 				vq->stats.handled_bytes = 0;
 				vq->stats.was_limited = 0;
+				softirq_diff_time = kcpustat_this_cpu->cpustat[CPUTIME_SOFTIRQ];
+				softirq_diff = kstat_cpu_irqs_sum(get_cpu());
 				rdtscll(work_start_tsc);
 				work->fn(work);
 				rdtscll(work_end_tsc);
+				softirq_diff_time = kcpustat_this_cpu->cpustat[CPUTIME_SOFTIRQ] - softirq_diff_time;
+				softirq_diff = kstat_cpu_irqs_sum(get_cpu()) - softirq_diff;
+				if (softirq_diff > 0){
+					worker->stats.ksoftirq_occurences++;
+					worker->stats.ksoftirq_time += softirq_diff_time;
+					worker->stats.ksoftirqs += softirq_diff;	
+
+					vq->stats.ksoftirq_occurences++;
+					vq->stats.ksoftirq_time += softirq_diff_time;
+					vq->stats.ksoftirqs += softirq_diff;			
+				}				
 				vq->stats.notif_cycles += (work_end_tsc - work_start_tsc);
+				worker->stats.notif_cycles += (work_end_tsc - work_start_tsc);
+				worker->stats.total_work_cycles += (work_end_tsc - work_start_tsc);
+
 				if (likely(vq->stats.notif_works++ > 0))
 					vq->stats.notif_wait+=(work_start_tsc-work->arrival_cycles);
 				vq->stats.last_notif_tsc_end = work_end_tsc;
@@ -1139,18 +1200,35 @@ static int vhost_worker_thread(void *data)
 	/* Check one virtqueue from the round-robin list */
 	if (!list_empty(&worker->vqpoll_list)) {
 		struct vhost_virtqueue *vq = NULL;
-//		vhost_printk("worker %d has a non-empty poll list!", worker->id);
+		// vhost_printk("worker %d has a non-empty poll list!", worker->id);
 		vq = roundrobin_poll(&worker->vqpoll_list);
 		if (vq) {
+			u64 softirq_diff_time = 0;
+			u64 softirq_diff = 0;
 			set_mm(vq);
 			if (vq->avail && vq->last_avail_idx == vq->avail->idx +1 )
 				vq->stats.ring_full++;
 			vq->stats.handled_bytes = 0;
 			vq->stats.was_limited = 0;
+			softirq_diff_time = kcpustat_this_cpu->cpustat[CPUTIME_SOFTIRQ];
+			softirq_diff = kstat_cpu_irqs_sum(get_cpu());
 			rdtscll(poll_start_tsc);
 			vq->handle_kick(&vq->poll.work);
 			rdtscll(poll_end_tsc);
+			softirq_diff_time = kcpustat_this_cpu->cpustat[CPUTIME_SOFTIRQ] - softirq_diff;
+			softirq_diff = kstat_cpu_irqs_sum(get_cpu()) - softirq_diff;
+			if (softirq_diff > 0){
+				worker->stats.ksoftirq_occurences++;
+				worker->stats.ksoftirq_time += softirq_diff_time;
+				worker->stats.ksoftirqs += softirq_diff;
+
+				vq->stats.ksoftirq_occurences++;
+				vq->stats.ksoftirq_time += softirq_diff_time;
+				vq->stats.ksoftirqs += softirq_diff;					
+			}				
 			vq->stats.poll_cycles+=(poll_end_tsc-poll_start_tsc);
+			worker->stats.poll_cycles+=(poll_end_tsc-poll_start_tsc);		
+			worker->stats.total_work_cycles+=(poll_end_tsc-poll_start_tsc);
 			if (likely(vq->stats.poll_kicks++ > 0))
 				vq->stats.poll_wait+=(poll_start_tsc-vq->stats.last_poll_tsc_end);
 			vq->stats.last_poll_tsc_end = poll_end_tsc;
@@ -1643,7 +1721,7 @@ static int __init vhost_init(void)
 
 	vhost_printk("calling vhost_fs_init");
 	vhost_fs_init();
-	vhost_printk("DONE - elvis v2.9.15.");
+	printk("DONE - elvis v2.9.15.4");
 	return 0;
 }
 
@@ -1825,6 +1903,10 @@ static void workers_pool_locate_new_default_worker(void){
 	create_new_worker(-1, 1);
 	vhost_printk("DONE worker = %d is now the default worker.\n",
 			workers_pool.default_worker->id);
+}
+
+static int worker_get_ksoftirq_time_clock_t(struct vhost_worker *worker){
+	return  cputime64_to_clock_t(worker->stats.ksoftirq_time);
 }
 
 static int worker_get_cpu(struct vhost_worker *worker){
@@ -2157,6 +2239,12 @@ static inline void vhost_vq_enable_vqpoll(struct vhost_virtqueue *vq)
 }
 
 static inline int vhost_vq_can_vqpoll(struct vhost_virtqueue *vq){
+	vhost_printk("START");
+	vhost_printk("vq: %p.", vq);
+	vhost_printk("vq->handle_kick: %p.", vq->handle_kick);
+	vhost_printk("vq->vqpoll.shutdown: %d.", vq->vqpoll.shutdown);
+	vhost_printk("(vq->used_flags & VRING_USED_F_NO_NOTIFY): %d.", 
+		(vq->used_flags & VRING_USED_F_NO_NOTIFY));
 	return vq && vq->handle_kick && !vq->vqpoll.shutdown &&
 			!(vq->used_flags & VRING_USED_F_NO_NOTIFY);
 }
@@ -3727,6 +3815,26 @@ ssize_t vhost_fs_worker_set_locked(struct device *dev,
 	return count;
 }
 
+ssize_t vhost_fs_worker_get_ksoftirq_time_clock_t(struct device *dev,
+		struct device_attribute *attr, char *buf){
+	ssize_t length = 0;
+	struct vhost_worker *worker = (struct vhost_worker *)dev_get_drvdata(dev);
+	vhost_printk("START: worker %d\n", worker->id);
+	length = sprintf(buf, "%d\n", worker_get_ksoftirq_time_clock_t(worker));
+	vhost_printk("DONE!\npage = %s length = %ld\n", buf, length);
+	return length;
+}
+
+ssize_t vhost_fs_worker_get_total_ksoftirqs(struct device *dev,
+		struct device_attribute *attr, char *buf){
+	ssize_t length = 0;
+	struct vhost_worker *worker = (struct vhost_worker *)dev_get_drvdata(dev);
+	vhost_printk("START: worker %d\n", worker->id);
+	length = sprintf(buf, "%d\n", kstat_cpu_irqs_sum(worker_get_cpu(worker)));
+	vhost_printk("DONE!\npage = %s length = %ld\n", buf, length);
+	return length;
+}
+
 ssize_t vhost_fs_worker_get_cpu(struct device *dev,
 		struct device_attribute *attr, char *buf){
 	ssize_t length = 0;
@@ -3913,7 +4021,7 @@ ssize_t vhost_fs_queue_get_can_poll(struct device *dir,
 	struct vhost_virtqueue *vq = (struct vhost_virtqueue *)dev_get_drvdata(dir);
 	vhost_printk("START: vq.%d.%d\n", vq->dev->id, vq->id);
 	length = sprintf(buf, "%d\n", vhost_vq_can_vqpoll(vq));
-	vhost_printk("DONE!\npage = %s length = %ld\n", buf, length);
+	vhost_printk("DONE!\npage = %s length = %ld", buf, length);
 	return length;
 }
 
@@ -3923,7 +4031,7 @@ ssize_t vhost_fs_queue_get_poll(struct device *dir,
 	struct vhost_virtqueue *vq = (struct vhost_virtqueue *)dev_get_drvdata(dir);
 	vhost_printk("START: vq.%d.%d\n", vq->dev->id, vq->id);
 	length = sprintf(buf, "%d\n", vq->vqpoll.enabled);
-	vhost_printk("DONE!\npage = %s length = %ld\n", buf, length);
+	vhost_printk("DONE!\npage = %s length = %ld", buf, length);
 	return length;
 }
 
