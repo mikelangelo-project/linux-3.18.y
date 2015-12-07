@@ -839,22 +839,29 @@ static int vhost_net_release(struct inode *inode, struct file *f)
 	struct socket *tx_sock;
 	struct socket *rx_sock;
 
+	vhost_printk("START\n");
 	vhost_net_stop(n, &tx_sock, &rx_sock);
+	vhost_printk("\n");
 	vhost_net_flush(n);
+	vhost_printk("\n");
 	vhost_dev_stop(&n->dev);
+	vhost_printk("\n");
 	vhost_dev_cleanup(&n->dev, false);
-	vhost_net_vq_reset(n);
+	vhost_printk("\n");
 	if (tx_sock)
 		sockfd_put(tx_sock);
+	vhost_printk("\n");
 	if (rx_sock)
 		sockfd_put(rx_sock);
 	/* Make sure no callbacks are outstanding */
 	synchronize_rcu_bh();
+	vhost_printk("\n");
 	/* We do an extra flush before freeing memory,
 	 * since jobs can re-queue themselves. */
 	vhost_net_flush(n);
 	kfree(n->dev.vqs);
 	kvfree(n);
+	vhost_printk("DONE\n");
 	return 0;
 }
 
@@ -1107,27 +1114,50 @@ static long vhost_net_ioctl(struct file *f, unsigned int ioctl,
 	u64 features;
 	int r;
 
+	vhost_printk("START net device = %d, worker = %d, ioctl = %d, argp = %p\n",
+					n->dev.id, n->dev.worker->id, ioctl, argp);
+
 	switch (ioctl) {
 	case VHOST_NET_SET_BACKEND:
-		if (copy_from_user(&backend, argp, sizeof backend))
+		vhost_printk("VHOST_NET_SET_BACKEND\n");
+		if (copy_from_user(&backend, argp, sizeof backend)){
+			vhost_printk("VHOST_NET_SET_BACKEND - END res = -EFAULT");
 			return -EFAULT;
-		return vhost_net_set_backend(n, backend.index, backend.fd);
+		}
+		r = vhost_net_set_backend(n, backend.index, backend.fd);
+		vhost_printk("VHOST_NET_SET_BACKEND - END");
+		return r;
 	case VHOST_GET_FEATURES:
+		vhost_printk("VHOST_GET_FEATURES\n");
 		features = VHOST_NET_FEATURES;
-		if (copy_to_user(featurep, &features, sizeof features))
+		if (copy_to_user(featurep, &features, sizeof features)){
+			vhost_printk("VHOST_GET_FEATURES - END res = -EFAULT");
 			return -EFAULT;
+		}
+		vhost_printk("VHOST_GET_FEATURES - END");
 		return 0;
 	case VHOST_SET_FEATURES:
-		if (copy_from_user(&features, featurep, sizeof features))
+		vhost_printk("VHOST_SET_FEATURES\n");
+		if (copy_from_user(&features, featurep, sizeof features)){
+			vhost_printk("VHOST_SET_FEATURES - END res = -EFAULT");
 			return -EFAULT;
-		if (features & ~VHOST_NET_FEATURES)
+		}
+		if (features & ~VHOST_NET_FEATURES){
+			vhost_printk("VHOST_SET_FEATURES - END res = -EOPNOTSUPP");
 			return -EOPNOTSUPP;
-		return vhost_net_set_features(n, features);
+		}
+		r = vhost_net_set_features(n, features);
+		vhost_printk("VHOST_SET_FEATURES - END");
+		return r;
 	case VHOST_RESET_OWNER:
-		return vhost_net_reset_owner(n);
+		vhost_printk("VHOST_RESET_OWNER\n");
+		r = vhost_net_reset_owner(n);
+		vhost_printk("VHOST_RESET_OWNER - END");
+		return r;
 	case VHOST_SET_OWNER:
 		return vhost_net_set_owner(n);
 	default:
+		vhost_printk("calling vhost_dev_ioctl - START\n");
 		mutex_lock(&n->dev.mutex);
 		r = vhost_dev_ioctl(&n->dev, ioctl, argp);
 		if (r == -ENOIOCTLCMD)
@@ -1135,6 +1165,7 @@ static long vhost_net_ioctl(struct file *f, unsigned int ioctl,
 		else
 			vhost_net_flush(n);
 		mutex_unlock(&n->dev.mutex);
+		vhost_printk("calling vhost_dev_ioctl - END\n");
 		return r;
 	}
 }

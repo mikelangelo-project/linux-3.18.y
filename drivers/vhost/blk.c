@@ -551,16 +551,22 @@ static int vhost_blk_release(struct inode *inode, struct file *f)
 	struct vhost_blk *blk = f->private_data;
 	struct file *file;
 
+	vhost_printk("START\n");
 	ida_simple_remove(&vhost_blk_index_ida, blk->index);
+	vhost_printk("\n");
 	vhost_blk_stop(blk, &file);
+	vhost_printk("\n");
 	vhost_blk_flush(blk);
+	vhost_printk("\n");
 	vhost_dev_cleanup(&blk->dev, false);
+	vhost_printk("\n");
 	if (file)
 		fput(file);
+	vhost_printk("\n");
 	kfree(blk->reqs);
 	kfree(blk->dev.vqs);
 	kfree(blk);
-
+	vhost_printk("END\n");
 	return 0;
 }
 
@@ -695,25 +701,48 @@ static long vhost_blk_ioctl(struct file *f, unsigned int ioctl,
 	u64 features;
 	int ret;
 
+	vhost_printk("START device = %d, worker = %d, ioctl = %d, argp = %p\n",
+			blk->dev.id, blk->dev.worker->id, ioctl, argp);
+
 	switch (ioctl) {
 	case VHOST_BLK_SET_BACKEND:
-		if (copy_from_user(&backend, argp, sizeof(backend)))
+		vhost_printk("VHOST_BLK_SET_BACKEND\n");
+		if (copy_from_user(&backend, argp, sizeof(backend))){
+			vhost_printk("VHOST_BLK_SET_BACKEND - END res = -EFAULT");
 			return -EFAULT;
-		return vhost_blk_set_backend(blk, backend.index, backend.fd);
+		}
+		ret = vhost_blk_set_backend(blk, backend.index, backend.fd);
+		vhost_printk("VHOST_BLK_SET_BACKEND - END");
+		return ret;
 	case VHOST_GET_FEATURES:
+		vhost_printk("VHOST_GET_FEATURES\n");
 		features = VHOST_BLK_FEATURES;
-		if (copy_to_user(featurep, &features, sizeof(features)))
+		if (copy_to_user(featurep, &features, sizeof(features))){
+			vhost_printk("VHOST_GET_FEATURES - END res = -EFAULT");
 			return -EFAULT;
+		}
+		vhost_printk("VHOST_GET_FEATURES - END");
 		return 0;
 	case VHOST_SET_FEATURES:
-		if (copy_from_user(&features, featurep, sizeof(features)))
+		vhost_printk("VHOST_SET_FEATURES\n");
+		if (copy_from_user(&features, featurep, sizeof(features))){
+			vhost_printk("VHOST_SET_FEATURES - END res = -EFAULT");
 			return -EFAULT;
-		if (features & ~VHOST_BLK_FEATURES)
+		}
+		if (features & ~VHOST_BLK_FEATURES){
+			vhost_printk("VHOST_SET_FEATURES - END res = -EOPNOTSUPP");
 			return -EOPNOTSUPP;
-		return vhost_blk_set_features(blk, features);
+		}
+		ret = vhost_blk_set_features(blk, features);
+		vhost_printk("VHOST_SET_FEATURES - END");
+		return ret;
 	case VHOST_RESET_OWNER:
-		return vhost_blk_reset_owner(blk);
+		vhost_printk("VHOST_RESET_OWNER\n");
+		ret = vhost_blk_reset_owner(blk);
+		vhost_printk("VHOST_RESET_OWNER - END");
+		return ret;
 	default:
+		vhost_printk("calling vhost_dev_ioctl - START\n");
 		mutex_lock(&blk->dev.mutex);
 		ret = vhost_dev_ioctl(&blk->dev, ioctl, argp);
 		if (ret == -ENOIOCTLCMD) {
@@ -721,9 +750,11 @@ static long vhost_blk_ioctl(struct file *f, unsigned int ioctl,
 			if (!ret && ioctl == VHOST_SET_VRING_NUM)
 				ret = vhost_blk_setup(blk);
 		} else {
+			vhost_printk("flushing device.");
 			vhost_blk_flush(blk);
 		}
 		mutex_unlock(&blk->dev.mutex);
+		vhost_printk("calling vhost_dev_ioctl - END\n");
 		return ret;
 	}
 }

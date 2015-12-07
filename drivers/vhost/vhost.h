@@ -13,11 +13,31 @@
 #include <linux/virtio_blk.h>
 #include <linux/virtio_net.h>
 #include <linux/atomic.h>
+#if 1 /* patchouli vhost-statistics */
+#include <linux/device.h>
+#endif
+
+#define vhost_printk(msg, ...) \
+	printk("vhost-debug: %s:%d: "msg"\n", __FUNCTION__, __LINE__, ##__VA_ARGS__)
 
 struct vhost_device;
-
 struct vhost_work;
+
+/*
+ * A function pointer to a function performing the work
+ */
 typedef void (*vhost_work_fn_t)(struct vhost_work *work);
+
+
+/*
+ * struct vhost_work - A vhost piece of work.
+ *	@node: worker thread list of works 
+ *	@fn: the work function
+ *	@done: processes waiting for the work completion
+ *	@flushing; 1 if the waiting processes are notified once on work completion
+ *	@queue_seq: 1 if the work has been assigned to a worker
+ *	@done_seq: 1 if the work is done but not yet cleared
+ */
 
 struct vhost_work {
 	struct list_head	  node;
@@ -62,11 +82,7 @@ struct vhost_log {
 	u64 len;
 };
 
-struct stat_entry {
-	struct dentry* debugfs_file; /* points to the debugfs file entry */
-	void* container; /* point to the memory structure containing the stat value */
-	int offset; /* offset in the memory structure where the value is located */
-};
+struct ubuf_info;
 
 /* The virtqueue structure describes a queue attached to a device. */
 struct vhost_virtqueue {
@@ -123,17 +139,18 @@ struct vhost_virtqueue {
 	void __user *log_base;
 	struct vhost_log *log;
 	int id;
+	struct device *vhost_fs_dev;
 	struct {
 		u64 poll_kicks; /* number of kicks in poll mode */
-		u64 poll_cycles; /* cycles spent handling kicks in poll mode*/;
+		u64 poll_cycles; /* cycles spent handling kicks in poll mode */
 		u64 poll_bytes; /* bytes sent/received by kicks in poll mode */
 		u64 poll_wait; /* cycles elapsed between poll kicks */
 		u64 poll_empty; /* number of times the queue was empty during poll */
 		u64 poll_empty_cycles; /* number of cycles elapsed while the queue was empty */
-		u64 poll_coalesced; /* number of times this queue was coaelesced */
+		u64 poll_coalesced; /* number of times this queue was coalesced */
 		u64 poll_limited; /* number of times the queue was limited by netweight during poll kicks*/
 		
-		u64 notif_works; /* number of worls in notif mode */
+		u64 notif_works; /* number of works in notif mode */
 		u64 notif_cycles; /* cycles spent handling works in notif mode */
 		u64 notif_bytes; /* bytes sent/received by works in notif mode */
 		u64 notif_wait; /* cycles elapsed between works in notif mode */
@@ -147,11 +164,12 @@ struct vhost_virtqueue {
 		u64 last_poll_tsc_end; /* tsc when the last poll finished */
 		u64 last_notif_tsc_end; /* tsc when the last notif finished */
 		u64 last_poll_empty_tsc; /* tsc when the queue was detected empty for the first time */
-		u64 handled_bytes; /* number of bytes handled by this queue in the last poll/notif. Must beupdated by the concrete vhost implementations (vhost-net)*/
-		u64 was_limited; /* flag indicating if the queue was limited by net-weight during the last poll/notif. Must beupdated by the concrete vhost implementations (vhost-net)*/
+		u64 handled_bytes; /* number of bytes handled by this queue in the last poll/notif. Must be updated by the concrete vhost implementations (vhost-net)*/
+		u64 was_limited; /* flag indicating if the queue was limited by net-weight during the last poll/notif. Must be updated by the concrete vhost implementations (vhost-net)*/
 
-		struct dentry *debugfs_dir; /* root entry in debugfs for the queue statistics */
-		struct stat_entry *entries; /* files created in the queue root entry */
+		u64 epoch_last_kick; /* The last epoch that the queue kicked */
+		u64 epoch_last_work; /* The last epoch that we performed a work from this queue */
+		u64 work_this_epoch; /* The number of works we did from this queue this epoch */
 	} stats;
 	struct {
 		/* When a virtqueue is in vqpoll.enabled mode, it declares
@@ -173,19 +191,39 @@ struct vhost_virtqueue {
 		 * so vqpoll should not be re-enabled.
 		 */
 		bool shutdown;
-		/* Various counters used to decide when to enter polling mode
-		 * or leave it and return to notification mode.
-		 */
-		unsigned long jiffies_last_kick;
-		unsigned long jiffies_last_work;
-		int work_this_jiffy;
 		/* how many items were pending the last time we checked if it was stuck */
 		u32 last_pending_items;
 		
-		/* TSC  when we detected for the first time the queue was stuck
+		/* TSC when we detected for the first time the queue was stuck
 		   Used to measure how many cycles the queue has been stuck
 		 */
 		u64 stuck_cycles;
+
+		/* The number of cycles need to elapse without service to consider the
+		 * queue stuck
+		 */
+		int max_stuck_cycles;
+
+		/* The maximum number of pending items in the queue to consider the
+		 * queue stuck
+		 */
+		int max_pending_items;
+
+		/* The minimum amount of bytes to be processed in a single service
+		 * cycle
+		 */
+		size_t min_processed_data;
+
+		/* The maximum amount of bytes to be processed in a single service
+		 * cycle
+		 */
+		size_t max_processed_data;
+
+		/* The minimum rate in which a polled queue can be polled (disable = 0)
+		 * Note: This is designed for non-latency sensitive queues, when we want
+		 * to avoid sending a lot of virtual interrupts to the guest.
+		 */
+		int min_poll_rate;
 		/* virtqueue.avail is a userspace pointer, and each vhost
 		 * device may have a different process context, so polling
 		 * different vhost devices could involve page-table switches
@@ -199,9 +237,11 @@ struct vhost_virtqueue {
 	} vqpoll;
 };
 
+/* The device structure describes an I/O device working with vhost. */
 struct vhost_dev {
 	struct vhost_memory *memory;
 	struct mm_struct *mm;
+	struct task_struct *owner;
 	struct mutex mutex;
 	struct vhost_virtqueue **vqs;
 	int nvqs;
@@ -209,25 +249,76 @@ struct vhost_dev {
 	struct eventfd_ctx *log_ctx;
 	struct vhost_worker *worker;
 	int id;
+	struct device *vhost_fs_dev;
+	struct{
+	} stats;
+	struct{
+		/* The device operation mode. has two operation modes.
+		 * 1. VHOST_DEVICE_OPERATION_MODE_NORMAL - The device can receive new
+		 *    work. and the worker assigned to it can process them. At this
+		 *    state the device CANNOT be transfered safely.
+		 * 2. VHOST_DEVICE_OPERATION_MODE_TRANSFERRING - Device operation mode
+		 *    during transfer. Arriving new works are attached to the device's
+		 *    suspended_work_list to be later processed by the new worker. The
+		 *    old worker processes any existing work in its work_list and keeps
+		 *    polling the devices virtual queues until it comes across a "detach
+		 *    device work" that removes the virtual queues of the device from
+		 *    the the old worker's vqpoll_list. The last step in the transfer
+		 *    work is to queue an "attach device work" in the new worker.
+		 *    The new worker then changes the worker pointer of the device. Adds
+		 *    all polled queues to its vqpoll_list. Added all suspended work to
+		 *    its work_list. finally the new worker set the operation mode of
+		 *    the device back to normal.
+		 */
+		atomic_t operation_mode;
+		spinlock_t suspended_work_lock;
+		struct list_head suspended_work_list;
+		int suspended_works;
+	} transfer;
+	struct list_head vhost_dev_table_entry;
 };
+
+/* Worker structure, a worker thread performing the real I/O operations. */
 struct vhost_worker {
 	spinlock_t work_lock;
 	struct list_head work_list;
+	/* The number of cycles need to elapse to consider the work_list stuck
+	 * (0 = disabled) */
+	u64 work_list_max_stuck_cycles;
 	struct task_struct *worker_thread;
-	
+
 	/* num of devices this worker is currently handling */
-	int num_devices;
+	atomic_t num_devices;
 	/* worker id */
 	int id;
+	/* Worker state. The worker has two states:
+	 * 1. VHOST_WORKER_STATE_NORMAL - The worker can be assigned new unassigned
+	 *    devices, and devices can be transfered to it.
+	 *
+	 * 2. VHOST_WORKER_STATE_LOCKED - The worker cannot be assigned new
+	 *    unassigned devices, and devices cannot be transfered to it. The aim of
+	 *    this state is to allow for a user-space program to remove existing
+	 *    workers by first marking them as a LOCKED worker, then transferring
+	 *    all the devices assigned to it to the other workers. The last step in
+	 *    removing the worker, after all devices were transfered away is to is
+	 *    to send it a remove control.
+	 *
+	 * 3.  VHOST_WORKER_STATE_SHUTDOWN - The worker is about to be shutdown.
+	 * 	   in order to shutdown a worker it must first be locked, and has no
+	 * 	   devices assigned to it. The worker thread will shutdown once all
+	 * 	   the works in its work_list are done.
+	 */
+	atomic_t state;
 	/* linked workers list */
 	struct list_head node;
 	/* tsc when the last work was processed from the work_list */
 	u64 last_work_tsc;
+	struct device *vhost_fs_dev;
 	struct {
 		u64 loops; /* number of loops performed */
 		u64 enabled_interrupts; /* number of times interrupts were re-enabled */
 		u64 cycles; /* cycles spent in the worker, excluding cycles doing queue work */
-		u64 switches; /* number of times the mm was  switched */
+		u64 mm_switches; /* number of times the mm was switched */
 		u64 wait; /* number of cycles the worker thread was not running after schedule */
 		u64 empty_works; /* number of times there were no works in the queue -- ignoring poll kicks  */
 		u64 empty_polls; /* number of times there were no queues to poll and the polling queue was not empty  */
@@ -236,13 +327,21 @@ struct vhost_worker {
 		u64 pending_works; /* number of pending works */;
 
 		u64 last_loop_tsc_end; /* tsc when the last loop was performed */
-
-		struct dentry *debugfs_dir; /* root entry in debugfs for the worker statistics */
-		struct stat_entry *entries; /* files created in the queue root entry */
 	} stats;
 	struct list_head vqpoll_list;
+	/* The maximum number of cycles a worker disable software interrupts while
+	 * processing virtio queues. */
+	int max_disabled_soft_interrupts_cycles;
 };
 
+enum {
+	/* the size of the new workers array located in workers pool. */
+	VHOST_WORKERS_POOL_NEW_WORKERS_SIZE = 32,
+	/* A vacant spot in the new workers array located in workers pool. */
+	VHOST_WORKERS_POOL_NEW_WORKERS_VACANT = -1
+};
+
+/* The pool of all the worker threads in vhost */
 struct vhost_workers_pool {
 	/* list of active workers */
 	struct list_head workers_list;
@@ -250,9 +349,29 @@ struct vhost_workers_pool {
 	spinlock_t workers_lock;
 	/* last worker id */
 	int last_worker_id;
-	/* max num of devices a single worker can handle */
-	int num_devices_per_worker;	
+	struct vhost_worker *default_worker;
+
+	/* An array of new workers. when a new worker is added it should
+	 * write its id in the first vacant spot. vacant spots are marked by
+	 * VHOST_WORKERS_POOL_NEW_WORKERS_VACANT.
+	 * Upon reading the create file we write back the ids of the new workers
+	 * and vacant the spot in the new_worker array. */
+	int new_workers[VHOST_WORKERS_POOL_NEW_WORKERS_SIZE];
 };
+
+
+/* A table containing all the devices simulated by vhost. */
+struct vhost_dev_table {
+	/* list of active devices */
+	struct list_head entries;
+	/* lock to protect the device table */
+	spinlock_t entries_lock;
+};
+
+int vhost_dev_table_add(struct vhost_dev *dev);
+int vhost_dev_table_remove(struct vhost_dev *dev);
+struct vhost_dev *vhost_dev_table_get(int device_id);
+
 
 void vhost_dev_init(struct vhost_dev *, struct vhost_virtqueue **vqs, int nvqs);
 long vhost_dev_set_owner(struct vhost_dev *dev);
