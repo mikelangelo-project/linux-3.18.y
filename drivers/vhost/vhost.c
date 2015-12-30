@@ -706,7 +706,6 @@ static struct vhost_work *vhost_work_dequeue(struct vhost_worker* worker,
 void vhost_work_queue(struct vhost_dev *dev, struct vhost_work *work)
 {
 	unsigned long flags;
-//	vhost_printk("attempting to add work %p into device %d.", work, dev->id);
 
 	if (unlikely(atomic_read(&dev->transfer.operation_mode) ==
 			VHOST_DEVICE_OPERATION_MODE_TRANSFERRING)){
@@ -790,7 +789,6 @@ static atomic_t last_vqid = ATOMIC_INIT(0);
  * is loaded. use vhost_vq_enable_vqpoll instead.
  */
 static void vhost_vq_enable_vqpoll_unsafe(struct vhost_virtqueue *vq){
-	printk_vq("Enabling vqpoll - START", vq);
 	if (vq->vqpoll.enabled)
 		return; /* already enabled, nothing to do */
 	if (!vq->handle_kick)
@@ -820,8 +818,6 @@ static void vhost_vq_enable_vqpoll_unsafe(struct vhost_virtqueue *vq){
 	vq->vqpoll.avail_mapped = (struct vring_avail *) (
 		(unsigned long)kmap(vq->vqpoll.avail_page) |
 		((unsigned long)vq->avail & ~PAGE_MASK));
-
-	printk_vq("Enabling vqpoll - DONE.", vq);
 }
 
 /*
@@ -834,7 +830,6 @@ static void vhost_vq_enable_vqpoll_unsafe(struct vhost_virtqueue *vq){
  * is loaded. use vhost_vq_disable_vqpoll instead.
  */
 static void vhost_vq_disable_vqpoll_unsafe(struct vhost_virtqueue *vq){
-	printk_vq("Disabling vqpoll", vq);
 	if (!vq->vqpoll.enabled) {
 		return; /* already disabled, nothing to do */
 	}
@@ -932,7 +927,6 @@ static struct vhost_virtqueue *roundrobin_poll(struct list_head *list) {
 	u64 tsc;
 	int pending_items;
 
-	// vhost_printk("START");
 	if (list_empty(list)){
 		return NULL;
 	}
@@ -956,17 +950,13 @@ static struct vhost_virtqueue *roundrobin_poll(struct list_head *list) {
 	WARN_ON(list_empty(list));
 	
 	/* If poll_coalescing_rate is set, avoid kicking the same vq too often */
-	// vhost_printk("before coalesing");
 	if (vq->vqpoll.min_poll_rate > 0) {
 		if (vq->vqpoll.min_poll_rate > tsc - vq->stats.last_poll_tsc_end){
-			// vhost_printk("coalesing: min_poll_rate: %llu, tsc: %llu, last_poll_tsc_end: %llu, d: %llu", 
-			// 	vq->vqpoll.min_poll_rate, tsc, vq->stats.last_poll_tsc_end, 
-			// 	tsc - vq->stats.last_poll_tsc_end);
 			vq->stats.poll_coalesced++;
 			return NULL;
 		}
 	}
-	// vhost_printk("after coalesing");
+
 	/* See if there is any new work available from the guest. */
 	/* TODO: need to check the optional idx feature, and if we haven't
 	 * reached that idx yet, don't kick... */
@@ -1071,7 +1061,6 @@ static bool vhost_max_stuck_cycles_huristic(struct vhost_virtqueue  *vq,
 	}
 
 	// no stuck queues  => we can continue
-	vhost_printk("no stuck queues  => we can continue");
 	return true;
 }
 
@@ -1103,8 +1092,8 @@ static bool vhost_full_queue_avoidance_huristic(struct vhost_virtqueue  *vq,
 			vq_id, vq_iterator->dev->id);
 		return false;
 	}
+
 	// no almost full queues  => we can continue
-	vhost_printk("no almost full queues => we can continue");
 	return true;	
 }
 
@@ -1122,8 +1111,6 @@ bool vhost_can_continue(struct vhost_virtqueue  *vq,
 	if (processed_data > vq->max_processed_data_limit){
 		goto cannot_continue;
 	}
-
-	vhost_printk("We processed more then the minimum and less then the maximum");
 
 	// if there are work items pending for too long we can not continue
 	if (vhost_work_dequeue(worker, 0) == NULL){
@@ -1265,7 +1252,7 @@ static int vhost_worker_thread(void *data)
 	/* Check one virtqueue from the round-robin list */
 	if (!list_empty(&worker->vqpoll_list)) {
 		struct vhost_virtqueue *vq = NULL;
-		// vhost_printk("worker %d has a non-empty poll list!", worker->id);
+
 		vq = roundrobin_poll(&worker->vqpoll_list);
 		if (vq) {
 			u64 softirq_diff_time = 0;
@@ -1331,7 +1318,7 @@ static int vhost_worker_thread(void *data)
 				local_bh_disable();
 			} else {
 				bh_disabled_tsc = 0;
-				printk("abelg: disable_soft_interrupts_cycles=0\n");
+				vhost_printk("abelg: disable_soft_interrupts_cycles=0\n");
 			}
 		}
 	} else {
@@ -1340,7 +1327,7 @@ static int vhost_worker_thread(void *data)
 			schedule();
 		// check if now we should start disabling them (mod param value set to >0 )
 		if (worker->max_disabled_soft_interrupts_cycles) {
-			printk("abelg: disable_soft_interrupts_cycles=%d\n", worker->max_disabled_soft_interrupts_cycles);
+			vhost_printk("abelg: disable_soft_interrupts_cycles=%d\n", worker->max_disabled_soft_interrupts_cycles);
 			bh_disabled_tsc = loop_end_tsc;
 			local_bh_disable();
 		}
@@ -1368,7 +1355,6 @@ static void vhost_fs_dir_init(void *owner, struct device **vhost_fs_dev,
 		const char *fmt, ...) {
 	int i = 0;
 	va_list vargs;
-	vhost_printk("START.");
 
 	va_start(vargs, fmt);
 	*vhost_fs_dev = device_create_vargs(vhost_fs_class, parent, (dev_t)0,
@@ -1383,22 +1369,18 @@ static void vhost_fs_dir_init(void *owner, struct device **vhost_fs_dev,
 		WARN(IS_ERR_VALUE(ret), "couldn't create directory for id %s, "
 			"err = %ld.\n", id, ret);
 		kfree(id);
-		vhost_printk("DONE - ERROR.");
 		return;
 	}
-	vhost_printk("creating files for %s.\n", dev_name(*vhost_fs_dev));
+
 	for (; i < attrs_count; ++i){
 		int res;
-		vhost_printk("creating file %s.\n", attrs[i].attr.attr.name);
 		res = device_create_file(*vhost_fs_dev, &attrs[i].attr);
 		if (res < 0){
 			WARN(res < 0, "couldn't create class file %s, err = %d.\n",
 					attrs[i].attr.attr.name, res);
-			vhost_printk("DONE - ERROR.");
 			return;
 		}
 	}
-	vhost_printk("DONE.");
 }
 
 #define vhost_fs_init_per_worker_dir(w) \
@@ -1422,19 +1404,12 @@ static void vhost_fs_dir_init(void *owner, struct device **vhost_fs_dev,
 static void vhost_fs_dir_exit(struct device *vhost_fs_dev,
 		struct dev_ext_attribute *attrs, size_t attrs_count) {
 	int i=0;
-	vhost_printk("START.");
 	for (; i < attrs_count; ++i){
-		vhost_printk("removing file %s.", attrs[i].attr.attr.name);
 		device_remove_file(vhost_fs_dev, &attrs[i].attr);
 	}
 
 	// Releasing the device directory
-	vhost_printk("Releasing the device directory.");
-	// vhost_printk("Decrement reference count to device object.");
-	// put_device(vhost_fs_dev);
-	vhost_printk("Unregistering the device.");
 	device_unregister(vhost_fs_dev);
-	vhost_printk("DONE.");
 }
 
 #define vhost_fs_exit_per_worker_dir(w) \
@@ -1452,21 +1427,18 @@ static void vhost_fs_dir_exit(struct device *vhost_fs_dev,
 
 static void vhost_fs_init(void) {
 	int i = 0;
-	vhost_printk("START.");
 
 	// create the vhost class
-	vhost_printk("create the vhost class.");
 	vhost_fs_class = class_create(THIS_MODULE, MODULE_NAME);
 	if (IS_ERR(vhost_fs_class)){
 		WARN(IS_ERR(vhost_fs_class), "couldn't create class, err = %ld\n",
 				PTR_ERR(vhost_fs_class));
 		return;
 	}
+
 	// add global files
-	vhost_printk("add global files.");
 	for (; i < ARRAY_LENGTH(vhost_fs_global_attrs); ++i){
 		int res;
-		vhost_printk("creating file %s.\n", vhost_fs_global_attrs[i].attr.name);
 		res = class_create_file(vhost_fs_class, &vhost_fs_global_attrs[i]);
 		if (res < 0){
 			WARN(res < 0, "couldn't create class file %s, err = %d.\n",
@@ -1476,50 +1448,37 @@ static void vhost_fs_init(void) {
 	}
 
 	// add workers directory and global files
-	vhost_printk("add workers directory and global files.");
 	vhost_fs_dir_init(NULL, &vhost_fs_workers, NULL,
 			vhost_fs_global_worker_attrs,
 			ARRAY_LENGTH(vhost_fs_global_worker_attrs),
 			"%s", VHOST_FS_DIRECTORY_WORKER);
 
 	// add device directory and global files
-	vhost_printk("add workers directory and global files.");
 	vhost_fs_dir_init(NULL, &vhost_fs_devices, NULL, NULL, 0,
 			"%s", VHOST_FS_DIRECTORY_DEVICE);
 
 	// add device directory and global files
-	vhost_printk("add device directory and global files.");
 	vhost_fs_dir_init(NULL, &vhost_fs_queues, NULL, NULL, 0,
 				"%s", VHOST_FS_DIRECTORY_VIRTUAL_QUEUE);
-	vhost_printk("DONE.");
 }
 
 static void vhost_fs_exit(void) {
 	int i = 0;
-	vhost_printk("START.");
+
 	// Remove files from the class directory
-	vhost_printk("Remove files from the class directory.");
 	for (i = 0; i < ARRAY_LENGTH(vhost_fs_global_attrs); ++i){
 		vhost_printk("removing file %s.\n", vhost_fs_global_attrs[i].attr.name);
 		class_remove_file(vhost_fs_class, &vhost_fs_global_attrs[i]);
 	}
 
 	// Remove workers directory and global files
-	vhost_printk("Remove workers directory and global files.");
 	vhost_fs_dir_exit(vhost_fs_workers, vhost_fs_global_worker_attrs,
 			ARRAY_LENGTH(vhost_fs_global_worker_attrs));
-
 	// Remove devices directory and global files
-	vhost_printk("Remove devices directory and global files.");
 	vhost_fs_dir_exit(vhost_fs_devices, NULL, 0);
-
 	// Remove queues directory and global files
-	vhost_printk("Remove queues directory and global files.");
 	vhost_fs_dir_exit(vhost_fs_queues, NULL, 0);
-
-	vhost_printk("Destroy the vhost fs class.");
 	class_destroy(vhost_fs_class);
-	vhost_printk("DONE.");
 }
 
 struct vhost_dev_transfer_struct {
@@ -1547,20 +1506,17 @@ static void vhost_attach_device_to_worker(struct vhost_work *transfer_work){
 	}
 
 	spin_lock_irqsave(&worker->work_lock, flags);
-	vhost_printk("increase device number of dst worker.");
 	atomic_inc(&worker->num_devices);
 
-	vhost_printk("Switch to normal operation mode.");
 	/* Switch to normal operation mode */
 	atomic_set(&dev->transfer.operation_mode, VHOST_DEVICE_OPERATION_MODE_NORMAL);
 
 	spin_lock(&dev->transfer.suspended_work_lock);
-	vhost_printk("Adding all suspended work items to dst worker work_list.");
+    /* Adding all suspended work items to dst worker work_list. */
 	list_splice_init(&dev->transfer.suspended_work_list, &worker->work_list);
 	dev->worker->stats.pending_works += dev->transfer.suspended_works;
 	spin_unlock(&dev->transfer.suspended_work_lock);
 	spin_unlock_irqrestore(&worker->work_lock, flags);
-	vhost_printk("DONE.");
 }
 
 static void vhost_detach_device_from_worker(struct vhost_work *transfer_work){
@@ -1568,7 +1524,7 @@ static void vhost_detach_device_from_worker(struct vhost_work *transfer_work){
 	struct vhost_dev *dev = NULL;
 	struct vhost_worker* worker = NULL;
 	struct vhost_virtqueue *cur, *next;
-	vhost_printk("START");
+
 	t = container_of(transfer_work, struct vhost_dev_transfer_struct, work);
 	dev = t->device;
 	worker = t->src_worker;
@@ -1576,28 +1532,22 @@ static void vhost_detach_device_from_worker(struct vhost_work *transfer_work){
 	vhost_printk("device %d from worker %d to worker %d.\n", dev->id,
 			t->src_worker->id, t->dst_worker->id);
 
-	vhost_printk("remove all polled queues of the device from src_worker polled queues list.");
 	/* remove all polled queues of the device from src_worker polled queues list */
 	list_for_each_entry_safe(cur, next, &worker->vqpoll_list, vqpoll.link) {
 		if (cur->dev == dev){
-			vhost_printk("deleting vq %p from worker vqpoll_list", cur);
 			list_del_init(&cur->vqpoll.link);
 		}
 	}
-	vhost_printk("Reduce the number of devices.");
 	/* Reduce the number of devices  */
 	atomic_dec(&worker->num_devices);
-	vhost_printk("Set dst worker as worker assigned to device.");
 	/* Set dst worker as worker assigned to device. */
 	dev->worker = t->dst_worker;
-	vhost_printk("DONE.");
 }
 
 static int vhost_dev_transfer_to_worker(struct vhost_dev *d,
 		struct vhost_worker* w){
 	struct vhost_dev_transfer_struct transfer;
 
-	vhost_printk("START\n");
 	BUG_ON(d == NULL);
 	BUG_ON(d->worker == NULL);
 	BUG_ON(w == NULL);
@@ -1615,12 +1565,9 @@ static int vhost_dev_transfer_to_worker(struct vhost_dev *d,
 	transfer.src_worker = d->worker;
 	transfer.dst_worker = w;
 
-	vhost_printk("adding work %p to queue.\n", &transfer);
 	vhost_work_init(&transfer.work, NULL, vhost_detach_device_from_worker);
 	vhost_work_force_enqueue(d->worker, &transfer.work);
-	vhost_printk("enqueued detach device %d\n", d->id);
 	vhost_work_flush(d, &transfer.work);
-	vhost_printk("detached device %d\n", d->id);
 
 	BUG_ON(d->worker != w);
 	BUG_ON(atomic_read(&d->transfer.operation_mode) !=
@@ -1629,14 +1576,11 @@ static int vhost_dev_transfer_to_worker(struct vhost_dev *d,
 	/* Place the vhost_attach_device_to_worker in the dest worker work_list */
 	vhost_work_init(&transfer.work, NULL, vhost_attach_device_to_worker);
 	vhost_work_force_enqueue(w, &transfer.work);
-	vhost_printk("enqueued attach device %d\n", d->id);
 	vhost_work_flush(d, &transfer.work);
-	vhost_printk("attached device %d\n", d->id);
 	return 1;
 }
 
 static void vhost_idle_work(struct vhost_work *w){
-	vhost_printk("\n");
 	unuse_mm(current->mm);
 }
 
@@ -1652,13 +1596,11 @@ static void vhost_worker_shutdown_work(struct vhost_work *w){
 	sd = container_of(w, struct vhost_worker_shutdown_struct, work);
 	old_state = atomic_cmpxchg(&sd->worker->state, VHOST_WORKER_STATE_LOCKED,
 			VHOST_WORKER_STATE_SHUTDOWN);
-	vhost_printk("\n");
 	if (old_state != VHOST_WORKER_STATE_LOCKED) {
 		vhost_printk("worker wasn't locked was %d (0 = normal, 1 = locked, "
 				"2 = shutdown). DONE.\n", old_state);
 		return;
 	}
-	vhost_printk("\n");
 	unuse_mm(current->mm);
 }
 
@@ -1670,9 +1612,7 @@ static void vhost_worker_shutdown_work(struct vhost_work *w){
 static int vhost_worker_remove_unsafe(struct vhost_worker *worker){
 	struct vhost_worker_shutdown_struct shutdown;
 
-	vhost_printk("\n");
 	vhost_fs_exit_per_worker_dir(worker);
-	vhost_printk("\n");
 
 	BUG_ON(atomic_read(&worker->num_devices) != 0);
 
@@ -1685,24 +1625,16 @@ static int vhost_worker_remove_unsafe(struct vhost_worker *worker){
 			"work list.");
 	shutdown.worker = worker;
 	vhost_work_init(&shutdown.work, NULL, vhost_worker_shutdown_work);
-	vhost_printk("\n");
 	vhost_work_force_enqueue(worker, &shutdown.work);
 	/*wait until the final work is done.*/
-	vhost_printk("wait until the final work is done.");
 	vhost_worker_flush_work(&shutdown.work);
-	vhost_printk("\n");
 
 	/* cleanup worker */	
 	spin_lock_irq(&workers_pool.workers_lock);
-	vhost_printk("\n");
 	worker->worker_thread = NULL;
-	vhost_printk("\n");
 	list_del(&worker->node);
-	vhost_printk("\n");
 	spin_unlock_irq(&workers_pool.workers_lock);
-	vhost_printk("\n");
 	kfree(worker);
-	vhost_printk("DONE!\n");
 	worker = NULL;
 	return 1;
 }
@@ -1715,15 +1647,13 @@ static int vhost_worker_remove_unsafe(struct vhost_worker *worker){
 static int vhost_worker_remove(struct vhost_worker *worker){
 	int state;
 
-	vhost_printk("START\n");
 	BUG_ON(worker == NULL);
-	vhost_printk("\n");
 	state = atomic_read(&worker->state);
-	vhost_printk("\n");
 	if (state != VHOST_WORKER_STATE_LOCKED) {
 		vhost_printk("worker is already during shutdown or is normal. DONE.");
 		return state != VHOST_WORKER_STATE_NORMAL;
 	}
+
 	vhost_worker_remove_unsafe(worker);
 	return 1;
 }
@@ -1736,28 +1666,24 @@ int vhost_dev_table_add(struct vhost_dev *dev){
 }
 
 int vhost_dev_table_remove(struct vhost_dev *dev){
-	vhost_printk("START removing device %d\n", dev->id);
 	spin_lock_irq(&dev_table.entries_lock);
 	if (!list_empty(&dev->vhost_dev_table_entry))
 		list_del_init(&dev->vhost_dev_table_entry);
 	spin_unlock_irq(&dev_table.entries_lock);
-	vhost_printk("DONE removing device %d\n", dev->id);
 	return 1;
 }
 struct vhost_dev *vhost_dev_table_get(int device_id){
 	struct vhost_dev *pos;
-	vhost_printk("START searching for device %d\n", device_id);
 	spin_lock_irq(&dev_table.entries_lock);
 	list_for_each_entry(pos, &dev_table.entries, vhost_dev_table_entry) {
 		if (pos->id == device_id){
 			spin_unlock_irq(&dev_table.entries_lock);
-			vhost_printk("device found. DONE\n");
 			return pos;
 		}
 	}
 	spin_unlock_irq(&dev_table.entries_lock);
+
 	/* device wasn't found. */
-	vhost_printk("device wasn't found. DONE\n");
 	return NULL;
 }
 
@@ -1777,16 +1703,13 @@ static int vhsot_worker_pool_init(void){
 
 static int __init vhost_init(void)
 {
-	vhost_printk("START");
 	vhsot_worker_pool_init();
 	spin_lock_init(&dev_table.entries_lock);
 	INIT_LIST_HEAD(&dev_table.entries);
 	atomic_set(&epoch, 0);
 	rdtscll(cycles_start_tsc);
 
-	vhost_printk("calling vhost_fs_init");
 	vhost_fs_init();
-	printk("DONE - elvis v2.9.15.4");
 	return 0;
 }
 
@@ -1868,19 +1791,15 @@ static int workers_pool_set_default_worker(struct vhost_worker *worker){
 /* Acquires locks before trying to set @worker as default worker. */
 static int workers_pool_set_default_worker_safe(struct vhost_worker *worker){
 	int res;
-	vhost_printk("worker = %d START.", worker->id);
 	spin_lock_irq(&workers_pool.workers_lock);
 	res = workers_pool_set_default_worker(worker);
 	spin_unlock_irq(&workers_pool.workers_lock);
-	vhost_printk("worker = %d DONE.", worker->id);
 	return res;
 }
 
 static int create_new_worker(int cpu, bool default_worker){
 	struct vhost_worker *worker;
 	int i;
-
-	vhost_printk("START.");
 
 	worker = kmalloc(sizeof *worker, GFP_KERNEL);
 	memset(worker, 0, sizeof *worker);
@@ -1906,7 +1825,6 @@ static int create_new_worker(int cpu, bool default_worker){
 		for_each_cpu(i, &mask){
 			length += sprintf(str_mask + length, "%d ", i);
 		}
-		vhost_printk("mask = %s", str_mask);
 	}
 
 	/*
@@ -1930,7 +1848,6 @@ static int create_new_worker(int cpu, bool default_worker){
 	spin_unlock_irq(&workers_pool.workers_lock);
 
 	vhost_fs_init_per_worker_dir(worker);
-	vhost_printk("New worker %d was created.\n", worker->id);
 
 	for (i=0; i<VHOST_WORKERS_POOL_NEW_WORKERS_SIZE; ++i){
 		if (workers_pool.new_workers[i] != VHOST_WORKERS_POOL_NEW_WORKERS_VACANT){
@@ -1940,7 +1857,6 @@ static int create_new_worker(int cpu, bool default_worker){
 		break;
 	}
 
-	vhost_printk("END.");
 	return worker->id;
 }
 
@@ -1952,7 +1868,6 @@ static int create_new_worker(int cpu, bool default_worker){
  */
 static void workers_pool_locate_new_default_worker(void){
 	struct vhost_worker *cur;
-	vhost_printk("START.");
 	/* searching for a NORMAL worker to be the default worker */
 	spin_lock_irq(&workers_pool.workers_lock);
 	list_for_each_entry(cur, &workers_pool.workers_list, node) {
@@ -1991,7 +1906,6 @@ static int worker_get_cpu(struct vhost_worker *worker){
 	for_each_cpu(i, &mask){
 		length += sprintf(str_mask + length, "%d ", i);
 	}
-	vhost_printk("mask = %s", str_mask);
 
 	if ((cpu = cpumask_next(-1, &mask)) >= nr_cpu_ids){
 		// there is no allowed cpus.
@@ -2007,7 +1921,6 @@ static int worker_get_cpu(struct vhost_worker *worker){
 static int vhost_worker_set_unlocked(struct vhost_worker *worker){
 	int old_state;
 
-	vhost_printk("worker = %d START.\n", worker->id);
 	BUG_ON(worker == NULL);
 	old_state = atomic_cmpxchg(&worker->state, VHOST_WORKER_STATE_LOCKED,
 			VHOST_WORKER_STATE_NORMAL);
@@ -2045,7 +1958,6 @@ static inline int vhost_worker_set_locked_unsafe(struct vhost_worker *worker){
  * @return 1 if the worker is now locked, 0 otherwise.
  */
 static int vhost_worker_set_locked(struct vhost_worker *worker){
-	vhost_printk("worker = %d START.\n", worker->id);
 	BUG_ON(worker == NULL);
 	if (vhost_worker_set_locked_unsafe(worker)){
 		// the worker was already locked, no need to do additional checks.
@@ -2067,7 +1979,6 @@ static int vhost_worker_set_locked(struct vhost_worker *worker){
 
 /* assign a the default worker for the device */
 static void vhost_dev_assign_worker(struct vhost_dev *dev){
-	vhost_printk("START dev = %d.", dev->id);
 	atomic_inc(&workers_pool.default_worker->num_devices);
 
 	if (unlikely(workers_pool.default_worker == NULL)){
@@ -2075,7 +1986,6 @@ static void vhost_dev_assign_worker(struct vhost_dev *dev){
 	}
 
 	dev->worker = workers_pool.default_worker;
-	vhost_printk("END.");
 }
 
 void vhost_dev_init(struct vhost_dev *dev,
@@ -2083,7 +1993,6 @@ void vhost_dev_init(struct vhost_dev *dev,
 {
 	int i;
 
-	vhost_printk("START.");
 	memset(dev, 0, sizeof *dev);
 
 	dev->vqs = vqs;
@@ -2106,8 +2015,6 @@ void vhost_dev_init(struct vhost_dev *dev,
 	INIT_LIST_HEAD(&dev->transfer.suspended_work_list);
 	atomic_set(&dev->transfer.operation_mode, VHOST_DEVICE_OPERATION_MODE_NORMAL);
 
-	vhost_printk("initializing device %d in worker %d.\n", dev->id,
-			dev->worker->id);
 	vhost_fs_init_device_dir(dev);
 
 	for (i = 0; i < dev->nvqs; ++i) {
@@ -2126,7 +2033,6 @@ void vhost_dev_init(struct vhost_dev *dev,
 
 	INIT_LIST_HEAD(&dev->vhost_dev_table_entry);
 	vhost_dev_table_add(dev);
-	vhost_printk("END.");
 }
 EXPORT_SYMBOL_GPL(vhost_dev_init);
 
@@ -2284,7 +2190,6 @@ static inline void vhost_vq_disable_vqpoll(struct vhost_virtqueue *vq, bool shut
 
 	vhost_work_queue(vq->dev, &work);
 	vhost_work_flush(vq->dev, &work);
-	printk_vq("NYH: Done vhost_vq_disable_vqpoll", vq);
 }
 
 /* vhost_vq_enable_vqpoll() asks the worker thread to start virtqueue polling
@@ -2304,16 +2209,9 @@ static inline void vhost_vq_enable_vqpoll(struct vhost_virtqueue *vq)
 	vhost_work_init(&work, vq, vhost_vq_enable_vqpoll_work);
 	vhost_work_queue(vq->dev, &work);
 	vhost_work_flush(vq->dev, &work);
-	printk_vq("NYH: Done vhost_vq_enable_vqpoll", vq);
 }
 
 static inline int vhost_vq_can_vqpoll(struct vhost_virtqueue *vq){
-	vhost_printk("START");
-	vhost_printk("vq: %p.", vq);
-	vhost_printk("vq->handle_kick: %p.", vq->handle_kick);
-	vhost_printk("vq->vqpoll.shutdown: %d.", vq->vqpoll.shutdown);
-	vhost_printk("(vq->used_flags & VRING_USED_F_NO_NOTIFY): %d.", 
-		(vq->used_flags & VRING_USED_F_NO_NOTIFY));
 	return vq && vq->handle_kick && !vq->vqpoll.shutdown &&
 			!(vq->used_flags & VRING_USED_F_NO_NOTIFY);
 }
@@ -2324,7 +2222,6 @@ void vhost_dev_cleanup(struct vhost_dev *dev, bool locked)
 {
 	struct vhost_work idle;
 	int i;
-	vhost_printk("START dev %d ptr %p locked %d.\n", dev->id, dev, locked);
 	for (i = 0; i < dev->nvqs; ++i) {
 		if (dev->vqs[i]->error_ctx)
 			eventfd_ctx_put(dev->vqs[i]->error_ctx);
@@ -2339,15 +2236,10 @@ void vhost_dev_cleanup(struct vhost_dev *dev, bool locked)
 
 		vhost_vq_disable_vqpoll(dev->vqs[i], true);
 
-		vhost_printk("\n");
-
 		vhost_work_init(&idle, NULL, vhost_idle_work);
-		vhost_printk("\n");
 		vhost_work_queue(dev, &idle);
 		/*wait until the final work is done.*/
-		vhost_printk("wait until the final work is done.");
 		vhost_work_flush(dev, &idle);
-		vhost_printk("\n");
 
 		// TODO: Think: When a device goes down, the worker might
 		// still have its mm as its current mm. We will never use it
@@ -2357,40 +2249,27 @@ void vhost_dev_cleanup(struct vhost_dev *dev, bool locked)
 		vhost_dev_table_remove(dev);
 		vhost_vq_reset(dev, dev->vqs[i]);
 	}
-	vhost_printk("\n");
 	vhost_dev_free_iovecs(dev);
-	vhost_printk("\n");
 	if (dev->log_ctx)
 		eventfd_ctx_put(dev->log_ctx);
 	dev->log_ctx = NULL;
-	vhost_printk("\n");
 	if (dev->log_file)
 		fput(dev->log_file);
-	vhost_printk("\n");
 	dev->log_file = NULL;
 	/* No one will access memory at this point */
-	vhost_printk("\n");
 	kfree(dev->memory);
-	vhost_printk("\n");
 	dev->memory = NULL;
-	vhost_printk("cleaning up device %d in worker %d.\n", dev->id, dev->worker->id);
 	vhost_fs_exit_device_dir(dev);
-	vhost_printk("\n");
 	if (dev->worker) {
-		vhost_printk("\n");
 		// decrease number of devices
 		atomic_dec_if_positive(&dev->worker->num_devices);
 	}
-	vhost_printk("\n");
 	// TODO: maybe we need to copy dev->mm, zero it, and only then mmput,
 	// to ensure we don't mm_use it again?
-	vhost_printk("\n");
 	if (dev->mm)
 		mmput(dev->mm);
-	vhost_printk("\n");
 	dev->mm = NULL;
 	dev->owner = NULL;
-	vhost_printk("DONE dev-ptr %p locked %d.\n", dev, locked);
 }
 EXPORT_SYMBOL_GPL(vhost_dev_cleanup);
 
@@ -2553,9 +2432,6 @@ long vhost_vring_ioctl(struct vhost_dev *d, int ioctl, void __user *argp)
 	struct vhost_vring_addr a;
 	u32 idx;
 	long r;
-
-	vhost_printk("START device = %d, worker = %d, ioctl = %d, argp = %p\n",
-			d->id, d->worker->id, ioctl, argp);
 
 	r = get_user(idx, idxp);
 	if (r < 0)
@@ -2758,9 +2634,6 @@ long vhost_dev_ioctl(struct vhost_dev *d, unsigned int ioctl, void __user *argp)
 	u64 p;
 	long r;
 	int i, fd;
-
-	vhost_printk("START device = %d, worker = %d, ioctl = %d, argp = %p\n",
-				d->id, d->worker->id, ioctl, argp);
 
 	/* If you are not the owner, you can become one */
 	if (ioctl == VHOST_SET_OWNER) {
@@ -3426,7 +3299,6 @@ bool vhost_enable_notify(struct vhost_dev *dev, struct vhost_virtqueue *vq)
 {
 	u16 avail_idx;
 	int r;
-//	vhost_printk("START - worker %d, dev %d, vq %d", dev->worker->id, dev->id, dev->vqs - vq);
 	/* In polling mode, when the backend (e.g., net.c) asks to enable
 	 * notifications, we don't enable guest notifications. Instead, start
 	 * polling on this vq by adding it to the round-robin list.
@@ -3436,12 +3308,10 @@ bool vhost_enable_notify(struct vhost_dev *dev, struct vhost_virtqueue *vq)
 			list_add_tail(&vq->vqpoll.link,
 				&vq->dev->worker->vqpoll_list);
 		}
-//		vhost_printk("END - worker %d, dev %d, vq %d", dev->worker->id, dev->id, dev->vqs - vq);
 		return false;
 	}
 
 	if (!(vq->used_flags & VRING_USED_F_NO_NOTIFY)){
-//		vhost_printk("END - worker %d, dev %d, vq %d", dev->worker->id, dev->id, dev->vqs - vq);
 		return false;
 	}
 	vq->used_flags &= ~VRING_USED_F_NO_NOTIFY;
@@ -3450,7 +3320,6 @@ bool vhost_enable_notify(struct vhost_dev *dev, struct vhost_virtqueue *vq)
 		if (r) {
 			vq_err(vq, "Failed to enable notification at %p: %d\n",
 			       &vq->used->flags, r);
-//			vhost_printk("END - worker %d, dev %d, vq %d", dev->worker->id, dev->id, dev->vqs - vq);
 			return false;
 		}
 	} else {
@@ -3458,7 +3327,6 @@ bool vhost_enable_notify(struct vhost_dev *dev, struct vhost_virtqueue *vq)
 		if (r) {
 			vq_err(vq, "Failed to update avail event index at %p: %d\n",
 			       vhost_avail_event(vq), r);
-//			vhost_printk("END - worker %d, dev %d, vq %d", dev->worker->id, dev->id, dev->vqs - vq);
 			return false;
 		}
 	}
@@ -3469,11 +3337,9 @@ bool vhost_enable_notify(struct vhost_dev *dev, struct vhost_virtqueue *vq)
 	if (r) {
 		vq_err(vq, "Failed to check avail idx at %p: %d\n",
 		       &vq->avail->idx, r);
-//		vhost_printk("END - worker %d, dev %d, vq %d", dev->worker->id, dev->id, dev->vqs - vq);
 		return false;
 	}
 
-//	vhost_printk("END - worker %d, dev %d, vq %d", dev->worker->id, dev->id, dev->vqs - vq);
 	return avail_idx != vq->avail_idx;
 }
 EXPORT_SYMBOL_GPL(vhost_enable_notify);
@@ -3482,7 +3348,6 @@ EXPORT_SYMBOL_GPL(vhost_enable_notify);
 void vhost_disable_notify(struct vhost_dev *dev, struct vhost_virtqueue *vq)
 {
 	int r;
-//	vhost_printk("START - worker %d, dev %d, vq %d", dev->worker->id, dev->id, dev->vqs - vq);
 	/* If this virtqueue is vqpoll.enabled, and on the polling list, it
 	 * will generate notifications even if the guest is asked not to send
 	 * them. So we must remove it from the round-robin polling list.
@@ -3491,12 +3356,10 @@ void vhost_disable_notify(struct vhost_dev *dev, struct vhost_virtqueue *vq)
 	if (vq->vqpoll.enabled) {
 		if(!list_empty(&vq->vqpoll.link))
 			list_del_init(&vq->vqpoll.link);
-//		vhost_printk("END - worker %d, dev %d, vq %d", dev->worker->id, dev->id, dev->vqs - vq);
 		return;
 	}
 
 	if (vq->used_flags & VRING_USED_F_NO_NOTIFY){
-//		vhost_printk("END - worker %d, dev %d, vq %d", dev->worker->id, dev->id, dev->vqs - vq);
 		return;
 	}
 	vq->used_flags |= VRING_USED_F_NO_NOTIFY;
@@ -3506,7 +3369,6 @@ void vhost_disable_notify(struct vhost_dev *dev, struct vhost_virtqueue *vq)
 			vq_err(vq, "Failed to enable notification at %p: %d\n",
 			       &vq->used->flags, r);
 	}
-//	vhost_printk("END - worker %d, dev %d, vq %d", dev->worker->id, dev->id, dev->vqs - vq);
 }
 EXPORT_SYMBOL_GPL(vhost_disable_notify);
 
@@ -3543,12 +3405,10 @@ static struct vhost_worker *vhost_get_worker(int worker_id){
 	list_for_each_entry(worker, &workers_pool.workers_list, node) {
 		if (worker->id == worker_id) {
 			found = 1;
-			vhost_printk("found a worker with id = w.%d, worker = %p", worker_id, worker);
 			break;
 		}
 	}
 	spin_unlock_irq(&workers_pool.workers_lock);
-	vhost_printk("worker_id = %d, return worker id %p", worker_id, worker);
 	return found == 1? worker: NULL;
 }
 
@@ -3556,7 +3416,6 @@ static int vhost_fs_get_worker_from_string(const char *buffer,
 		unsigned long count, struct vhost_worker **out){
 	long worker_id;
 	int err;
-	vhost_printk("START\n");
 	if (count < 3){
 		vhost_warn("Error: count was too short, only %lu\n", count);
 		return -EINVAL;
@@ -3575,18 +3434,13 @@ static int vhost_fs_get_worker_from_string(const char *buffer,
 		vhost_warn("Error: could not find worker w.%ld\n", worker_id);
 		return -EINVAL;
 	}
-	vhost_printk("END\n");
 	return 0;
 }
 
 static ssize_t vhost_fs_get_epoch(struct class *class,
 		struct class_attribute *attr, char *buf){
 	ssize_t length;
-	vhost_printk("START\n");
 	length = sprintf(buf, "%d\n", atomic_read(&epoch));
-	vhost_printk("page = %s length = %ld\n", buf, length);
-	vhost_printk("DONE!\npage = %s length = %ld\n",
-			buf, length);
 	return length;
 }
 
@@ -3595,7 +3449,6 @@ static ssize_t vhost_fs_inc_epoch(struct class *class,
 		const char *buffer, size_t count){
 	long value;
 	int err;
-	vhost_printk("START\n");
 	if ((err = kstrtol(buffer, 0, &value)) != 0){
 		vhost_warn("Error: %d.\n", err);
 		return err;
@@ -3605,7 +3458,6 @@ static ssize_t vhost_fs_inc_epoch(struct class *class,
 		return -EINVAL;
 	}
 	atomic_inc(&epoch);
-	vhost_printk("DONE!\n");
 	return count;
 }
 
@@ -3614,14 +3466,10 @@ static ssize_t vhost_fs_get_cycles(struct class *class,
 	ssize_t length;
 //	u64 end, cycles;
 	u64 cycles;
-	vhost_printk("START\n");
 //	rdtscll(end);
 //	cycles = end - cycles_start_tsc;
 	rdtscll(cycles);
 	length = sprintf(buf, "%llu\n", cycles);
-	vhost_printk("page = %s length = %ld\n", buf, length);
-	vhost_printk("DONE!\npage = %s length = %ld\n",
-			buf, length);
 	return length;
 }
 
@@ -3741,7 +3589,6 @@ ssize_t vhost_fs_get_recent_new_workers(struct device *dev,
 		struct device_attribute *attr, char *buf){
 	ssize_t length = 0;
 	int i = 0;
-	vhost_printk("START\n");
 	for (i=0; i<VHOST_WORKERS_POOL_NEW_WORKERS_SIZE; ++i){
 		if (workers_pool.new_workers[i] == VHOST_WORKERS_POOL_NEW_WORKERS_VACANT){
 			continue;
@@ -3754,8 +3601,6 @@ ssize_t vhost_fs_get_recent_new_workers(struct device *dev,
 	}
 	if (length > 0)
 		buf[length - 1] = '\n';
-	vhost_printk("page = %s length = %ld\n", buf, length);
-	vhost_printk("DONE!\npage = %s length = %ld\n", buf, length);
 	return length;
 }
 
@@ -3763,7 +3608,6 @@ ssize_t vhost_fs_create_new_worker(struct device *dev,
 		struct device_attribute *attr, const char *buffer, size_t count){
 	int res;
 	int err;
-	vhost_printk("START\n");
 	if ((err = kstrtoint(buffer, 0, &res)) != 0){
 		vhost_warn("Error: getting int: %d.\n", err);
 		return err;
@@ -3774,7 +3618,6 @@ ssize_t vhost_fs_create_new_worker(struct device *dev,
 		return -EINVAL;
 	}
 	create_new_worker(res, workers_pool.default_worker == NULL);
-	vhost_printk("DONE: return value is %lu\n", count);
 	return count;
 }
 
@@ -3784,7 +3627,6 @@ ssize_t vhost_fs_remove_worker(struct device *dev, struct device_attribute *attr
 	int num_devices;
 	int worker_id;
 	int err;
-	vhost_printk("START\n");
 	if ((err = vhost_fs_get_worker_from_string(buffer, count, &worker)) != 0){
 		vhost_warn("Error: getting worker: %d.\n", err);
 		return err;
@@ -3808,7 +3650,6 @@ ssize_t vhost_fs_remove_worker(struct device *dev, struct device_attribute *attr
 				"work_list - BUG.\n", worker_id);
 		return -EINVAL;
 	}
-	vhost_printk("DONE: return value is %lu\n", count);
 	return count;
 }
 
@@ -3817,7 +3658,6 @@ ssize_t vhost_fs_get_default_worker(struct device *dev,
 	ssize_t length;
 	struct vhost_worker *worker = NULL;
 	int worker_id;
-	vhost_printk("START\n");
 	worker = workers_pool.default_worker;
 	if (worker == NULL){
 		length = 0;
@@ -3825,7 +3665,6 @@ ssize_t vhost_fs_get_default_worker(struct device *dev,
 		worker_id = worker->id;
 		length = sprintf(buf, "w.%d\n", worker_id);
 	}
-	vhost_printk("DONE!\npage = %s length = %ld\n", buf, length);
 	return length;
 }
 
@@ -3833,7 +3672,6 @@ ssize_t vhost_fs_set_default_worker(struct device *dev,
 		struct device_attribute *attr, const char *buffer, size_t count){
 	struct vhost_worker *worker;
 	int err;
-	vhost_printk("START\n");
 	if ((err = vhost_fs_get_worker_from_string(buffer, count, &worker)) != 0){
 		vhost_printk("VHOST_FS_FILE_GLOBAL_WORKER_DEFAULT: error getting "
 				"worker: %d.\n", err);
@@ -3844,7 +3682,6 @@ ssize_t vhost_fs_set_default_worker(struct device *dev,
 		vhost_warn("Error: worker w.%d locked.\n", worker->id);
 		return -EINVAL;
 	}
-	vhost_printk("DONE: return value is %lu\n", count);
 	return count;
 }
 
@@ -3852,10 +3689,8 @@ ssize_t vhost_fs_worker_get_locked(struct device *dev,
 		struct device_attribute *attr, char *buf){
 	ssize_t length = 0;
 	struct vhost_worker *worker = (struct vhost_worker *)dev_get_drvdata(dev);
-	vhost_printk("START: worker %d\n", worker->id);
 	length = sprintf(buf, "%d\n",
 			atomic_read(&worker->state) != VHOST_WORKER_STATE_NORMAL);
-	vhost_printk("DONE!\npage = %s length = %ld\n", buf, length);
 	return length;
 }
 
@@ -3864,7 +3699,6 @@ ssize_t vhost_fs_worker_set_locked(struct device *dev,
 	struct vhost_worker *worker = (struct vhost_worker *)dev_get_drvdata(dev);
 	int err;
 	bool lock;
-	vhost_printk("START: worker %d\n", worker->id);
 	if ((err = strtobool(buffer, &lock))){
 		vhost_warn("Error: getting bool: %d.\n", err);
 		return err;
@@ -3880,7 +3714,6 @@ ssize_t vhost_fs_worker_set_locked(struct device *dev,
 			return -EINVAL;
 		}
 	}
-	vhost_printk("DONE: return value is %lu\n", count);
 	return count;
 }
 
@@ -3888,9 +3721,7 @@ ssize_t vhost_fs_worker_get_ksoftirq_time_clock_t(struct device *dev,
 		struct device_attribute *attr, char *buf){
 	ssize_t length = 0;
 	struct vhost_worker *worker = (struct vhost_worker *)dev_get_drvdata(dev);
-	vhost_printk("START: worker %d\n", worker->id);
 	length = sprintf(buf, "%d\n", worker_get_ksoftirq_time_clock_t(worker));
-	vhost_printk("DONE!\npage = %s length = %ld\n", buf, length);
 	return length;
 }
 
@@ -3901,15 +3732,12 @@ ssize_t vhost_fs_worker_get_total_ksoftirqs(struct device *dev,
 	int irqs_sum = 0;
 	struct vhost_worker *worker = (struct vhost_worker *)dev_get_drvdata(dev);
 	
-	printk("*****START: worker %d\n", worker->id);
 	cpu = worker_get_cpu(worker);
 	if (cpu != -1){
-		printk("*****cpu %d\n", cpu);
 		// the worker is pinned to more then one CPU core.
 		irqs_sum = kstat_cpu_irqs_sum(cpu);
 	}
 	length = sprintf(buf, "%d\n", irqs_sum);
-	printk("*****DONE!\npage = %s length = %ld\n", buf, length);
 	return length;
 }
 
@@ -3917,9 +3745,7 @@ ssize_t vhost_fs_worker_get_cpu(struct device *dev,
 		struct device_attribute *attr, char *buf){
 	ssize_t length = 0;
 	struct vhost_worker *worker = (struct vhost_worker *)dev_get_drvdata(dev);
-	vhost_printk("START: worker %d\n", worker->id);
 	length = sprintf(buf, "%d\n", worker_get_cpu(worker));
-	vhost_printk("DONE!\npage = %s length = %ld\n", buf, length);
 	return length;
 }
 
@@ -3927,9 +3753,7 @@ ssize_t vhost_fs_worker_get_pid(struct device *dev,
 		struct device_attribute *attr, char *buf){
 	ssize_t length = 0;
 	struct vhost_worker *worker = (struct vhost_worker *)dev_get_drvdata(dev);
-	vhost_printk("START: worker %d\n", worker->id);
 	length = sprintf(buf, "%d\n", worker->worker_thread->pid);
-	vhost_printk("DONE!\npage = %s length = %ld\n", buf, length);
 	return length;
 }
 
@@ -3938,7 +3762,6 @@ ssize_t vhost_fs_worker_get_dev_list(struct device *dev,
 	ssize_t length = 0;
 	struct vhost_worker *worker = (struct vhost_worker *)dev_get_drvdata(dev);
 	struct vhost_dev *device = NULL;
-	vhost_printk("START: worker w.%d\n", worker->id);
 	spin_lock_irq(&dev_table.entries_lock);
 	list_for_each_entry(device, &dev_table.entries, vhost_dev_table_entry) {
 		if (device->worker == worker){
@@ -3951,7 +3774,6 @@ ssize_t vhost_fs_worker_get_dev_list(struct device *dev,
 	spin_unlock_irq(&dev_table.entries_lock);
 	if (length > 0)
 		buf[length - 1] = '\n';
-	vhost_printk("DONE!\npage = %s length = %ld\n", buf, length);
 	return length;
 }
 
@@ -3959,9 +3781,7 @@ ssize_t vhost_fs_device_get_worker(struct device *dir,
 		struct device_attribute *attr, char *buf){
 	ssize_t length = 0;
 	struct vhost_dev *dev = (struct vhost_dev *)dev_get_drvdata(dir);
-	vhost_printk("START: dev d.%d\n", dev->id);
 	length = sprintf(buf, "w.%d\n", dev->worker->id);
-	vhost_printk("DONE!\npage = %s length = %ld\n", buf, length);
 	return length;
 	return 0;
 }
@@ -3995,9 +3815,7 @@ static ssize_t vhost_fs_device_get_delay_per_work(struct device *dir,
 		struct device_attribute *attr, char *buf){
 	ssize_t length = 0;
 	struct vhost_dev *dev = (struct vhost_dev *)dev_get_drvdata(dir);
-	vhost_printk("START: dev d.%d\n", dev->id);
 	length = sprintf(buf, "%llu\n", dev->stats.delay_per_work);
-	vhost_printk("DONE!\npage = %s length = %ld\n", buf, length);
 	return length;
 }
 
@@ -4006,13 +3824,11 @@ static ssize_t vhost_fs_device_set_delay_per_work(struct device *dir,
 	struct vhost_dev *dev = (struct vhost_dev *)dev_get_drvdata(dir);
 	u64 value;
 	int err;
-	vhost_printk("START: device d.%d\n", dev->id);
 	if ((err = kstrtoull(buffer, 0, &value)) != 0){
 		vhost_warn("Error: getting value: %d.\n", err);
 		return err;
 	}
 	dev->stats.delay_per_work = value;
-	vhost_printk("DONE: return value is %lu\n",	count);
 	return count;
 }
 
@@ -4020,9 +3836,7 @@ static ssize_t vhost_fs_device_get_delay_per_kbyte(struct device *dir,
 		struct device_attribute *attr, char *buf){
 	ssize_t length = 0;
 	struct vhost_dev *dev = (struct vhost_dev *)dev_get_drvdata(dir);
-	vhost_printk("START: dev d.%d\n", dev->id);
 	length = sprintf(buf, "%llu\n", dev->stats.delay_per_kbyte);
-	vhost_printk("DONE!\npage = %s length = %ld\n", buf, length);
 	return length;
 }
 
@@ -4031,13 +3845,11 @@ static ssize_t vhost_fs_device_set_delay_per_kbyte(struct device *dir,
 	struct vhost_dev *dev = (struct vhost_dev *)dev_get_drvdata(dir);
 	u64 value;
 	int err;
-	vhost_printk("START: device d.%d\n", dev->id);
 	if ((err = kstrtoull(buffer, 0, &value)) != 0){
 		vhost_warn("Error: getting value: %d.\n", err);
 		return err;
 	}
 	dev->stats.delay_per_kbyte = value;
-	vhost_printk("DONE: return value is %lu\n",	count);
 	return count;
 }
 
@@ -4046,7 +3858,6 @@ ssize_t vhost_fs_device_set_worker(struct device *dir,
 	struct vhost_dev *device = (struct vhost_dev *)dev_get_drvdata(dir);
 	struct vhost_worker *worker = NULL;
 	int err;
-	vhost_printk("START: device d.%d\n", device->id);
 	if ((err = vhost_fs_get_worker_from_string(buffer, count, &worker)) != 0){
 		vhost_warn("Error: getting worker: "
 				"%d.\n", err);
@@ -4061,7 +3872,6 @@ ssize_t vhost_fs_device_set_worker(struct device *dir,
 		vhost_warn("Error: device %d is already in transfer.\n", device->id);
 		return -EINVAL;
 	}
-	vhost_printk("DONE: return value is %lu\n",	count);
 	return count;
 }
 
@@ -4069,9 +3879,7 @@ ssize_t vhost_fs_device_get_owner(struct device *dir,
 		struct device_attribute *attr, char *buf){
 	ssize_t length = 0;
 	struct vhost_dev *dev = (struct vhost_dev *)dev_get_drvdata(dir);
-	vhost_printk("START: dev %d\n", dev->id);
 	length = sprintf(buf, "%d\n", dev->owner? dev->owner->pid : -1);
-	vhost_printk("DONE!\npage = %s length = %ld\n", buf, length);
 	return length;
 }
 
@@ -4080,7 +3888,6 @@ ssize_t vhost_fs_device_get_vq_list(struct device *dir,
 	ssize_t length = 0;
 	int i;
 	struct vhost_dev *dev = (struct vhost_dev *)dev_get_drvdata(dir);
-	vhost_printk("device %d\n",dev->id);
 	for (i=0; i<dev->nvqs; ++i){
 		length += sprintf(buf + length, "vq.%d.%d\t", dev->id, i);
 		if (length >= PAGE_SIZE){
@@ -4089,7 +3896,6 @@ ssize_t vhost_fs_device_get_vq_list(struct device *dir,
 	}
 	if (length > 0)
 		buf[length - 1] = '\n';
-	vhost_printk("DONE!\npage = %s length = %ld\n", buf, length);
 	return length;
 }
 
@@ -4097,9 +3903,7 @@ ssize_t vhost_fs_queue_get_can_poll(struct device *dir,
 		struct device_attribute *attr, char *buf){
 	ssize_t length = 0;
 	struct vhost_virtqueue *vq = (struct vhost_virtqueue *)dev_get_drvdata(dir);
-	vhost_printk("START: vq.%d.%d\n", vq->dev->id, vq->id);
 	length = sprintf(buf, "%d\n", vhost_vq_can_vqpoll(vq));
-	vhost_printk("DONE!\npage = %s length = %ld", buf, length);
 	return length;
 }
 
@@ -4107,9 +3911,7 @@ ssize_t vhost_fs_queue_get_poll(struct device *dir,
 		struct device_attribute *attr, char *buf){
 	ssize_t length = 0;
 	struct vhost_virtqueue *vq = (struct vhost_virtqueue *)dev_get_drvdata(dir);
-	vhost_printk("START: vq.%d.%d\n", vq->dev->id, vq->id);
 	length = sprintf(buf, "%d\n", vq->vqpoll.enabled);
-	vhost_printk("DONE!\npage = %s length = %ld", buf, length);
 	return length;
 }
 
@@ -4118,19 +3920,15 @@ ssize_t vhost_fs_queue_set_poll(struct device *dir,
 	struct vhost_virtqueue *vq = (struct vhost_virtqueue *)dev_get_drvdata(dir);
 	int err;
 	bool poll;
-	vhost_printk("START: %d.%d\n", vq->dev->id, vq->id);
 	if ((err = strtobool(buffer, &poll))){
 		vhost_warn("Error: getting bool: %d.\n", err);
 		return err;
 	}
 	if (poll){
-		vhost_printk("enable");
 		vhost_vq_enable_vqpoll(vq);
 	} else {
-		vhost_printk("disable");
 		vhost_vq_disable_vqpoll(vq, false);
 	}
-	vhost_printk("DONE: return value is %lu\n", count);
 	return count;
 }
 
@@ -4138,9 +3936,7 @@ ssize_t vhost_fs_queue_get_device(struct device *dir,
 		struct device_attribute *attr, char *buf){
 	ssize_t length = 0;
 	struct vhost_virtqueue *vq = (struct vhost_virtqueue *)dev_get_drvdata(dir);
-	vhost_printk("START: vq.%d.%d\n", vq->dev->id, vq->id);
 	length = sprintf(buf, "d.%d\n", vq->dev->id);
-	vhost_printk("DONE!\npage = %s length = %ld\n", buf, length);
 	return length;
 }
 
