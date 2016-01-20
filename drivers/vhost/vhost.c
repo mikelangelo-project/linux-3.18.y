@@ -672,10 +672,13 @@ static void vhost_work_force_enqueue(struct vhost_worker* worker,
 		list_add_tail(&work->node, &worker->work_list);
 		worker->stats.pending_works++;
 		work->queue_seq++;
+		spin_unlock(&work->lock);
+		spin_unlock_irqrestore(&worker->work_lock, flags);
 		wake_up_process(worker->worker_thread);
+	} else {
+		spin_unlock(&work->lock);
+		spin_unlock_irqrestore(&worker->work_lock, flags);	
 	}
-	spin_unlock(&work->lock);
-	spin_unlock_irqrestore(&worker->work_lock, flags);
 }
 
 static struct vhost_work *vhost_work_dequeue(struct vhost_worker* worker,
