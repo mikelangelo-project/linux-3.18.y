@@ -41,7 +41,7 @@ static int VHOST_MAX_NET_WEIGHT = 0x80000;
 module_param(VHOST_MAX_NET_WEIGHT, int, S_IRUGO|S_IWUSR);
 MODULE_PARM_DESC(VHOST_MAX_NET_WEIGHT, "Max number of bytes transferred before requeueing the job. Using this limit prevents one virtqueue from starving others");
 
-static int VHOST_MIN_NET_WEIGHT = 0x1000;
+static int VHOST_MIN_NET_WEIGHT = 0x10000;
 module_param(VHOST_MIN_NET_WEIGHT, int, S_IRUGO|S_IWUSR);
 MODULE_PARM_DESC(VHOST_MIN_NET_WEIGHT, "Min number of bytes transferred before requeueing the job. Using this limit prevents switching queues too often");
 #include <linux/ratelimit.h>
