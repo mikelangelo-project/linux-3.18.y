@@ -1,0 +1,5 @@
+config STATS_MODULE
+	tristate "A Simple statistics something."
+        default m
+	---help---
+	don't use me
