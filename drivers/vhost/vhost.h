@@ -17,11 +17,10 @@
 #include <linux/delay.h>
 
 #define vhost_warn(msg, ...) \
-	WARN(0, "vhost-debug: %s:%d: "msg"\n", __FUNCTION__, __LINE__, ##__VA_ARGS__)
+	WARN(1, "vhost-debug: %s:%d: "msg"\n", __FUNCTION__, __LINE__, ##__VA_ARGS__)
 
 #define vhost_printk(msg, ...) \
 	printk("vhost-debug: %s:%d: "msg"\n", __FUNCTION__, __LINE__, ##__VA_ARGS__)
-
 
 struct vhost_device;
 struct vhost_work;
@@ -275,6 +274,10 @@ struct vhost_dev {
 //		u64 encrypt_device; /* encrypt the content sent to the device, only available for blk */
 		u64 delay_per_work; /* the number of loops per work we have to delay the calculation. */
 		u64 delay_per_kbyte; /* the number of loops per kbyte we have to delay the calculation. */
+		u64 device_move_total;
+		u64 device_move_count;
+		u64 device_detach;
+		u64 device_attach;
 	} stats;
 	struct{
 		/* The device operation mode. has two operation modes.

@@ -91,14 +91,10 @@ static ssize_t func(struct device *dev,	struct device_attribute *attr, 		\
 	size_t offset;															\
 	value_type val;															\
 	long length;															\
-	vhost_printk("VHOST_FS_SHOW: %s %s\n", dev_name(dev->parent), 			\
-			dev_name(dev));													\
 	ea = container_of(attr, struct dev_ext_attribute, attr);				\
 	offset = (size_t)ea->var;												\
 	val = *(value_type *)((char *)dev_get_drvdata(dev) + offset);			\
 	length = snprintf(buf, PAGE_SIZE, str_format, val);						\
-	vhost_printk("VHOST_FS_SHOW: done!\n");									\
-	vhost_printk("page = %s length = %ld\n", buf, length);					\
 	return length;															\
 }
 
@@ -109,15 +105,12 @@ static ssize_t func(struct device *dev, 									\
 	size_t offset;															\
 	value_type out;															\
 	int err;																\
-	vhost_printk("VHOST_FS_STORE: %s %s\n", dev_name(dev->parent), 			\
-			dev_name(dev));													\
 	ea = container_of(attr, struct dev_ext_attribute, attr);				\
 	offset = (size_t)ea->var;												\
 	if ((err = kstrto(buf, 0, &out)) != 0){									\
 		return err;															\
 	}																		\
 	*(value_type *)((char *)dev_get_drvdata(dev) + offset) = out;			\
-	vhost_printk("VHOST_FS_STORE done: return value is %lu\n", size);		\
 	return size;															\
 }
 
@@ -140,7 +133,7 @@ VHOST_FS_STORE(vhost_fs_store_u64, u64, kstrtoull);
 		vhost_fs_show_u64, vhost_fs_store_u64), 							\
 		(void *)(VHOST_FS_DEVICE_STAT(field)) }
 #define VHOST_FS_DEVICE_STAT_READONLY_ATTR(name, field) \
-{__ATTR(name, S_IRUSR | S_IRGRP | S_IROTH, vhost_fs_show_u64, NULL,		\
+{__ATTR(name, S_IRUSR | S_IRGRP | S_IROTH, vhost_fs_show_u64, NULL),		\
 		(void *)(VHOST_FS_DEVICE_STAT(field)) }
 #define VHOST_FS_QUEUE_STAT_ATTR(name, field) \
 {__ATTR(name, S_IWUSR | S_IRUSR | S_IWGRP | S_IRGRP | S_IROTH, 	\
@@ -165,9 +158,6 @@ static ssize_t vhost_fs_inc_epoch(struct class *class,
 static ssize_t vhost_fs_get_cycles(struct class *class,
 		struct class_attribute *attr, char *buf);
 
-//static ssize_t vhost_fs_status(struct class *class,
-//		struct class_attribute *attr, char *buf);
-
 /* global attributes */
 static struct class_attribute vhost_fs_global_attrs[] = {
 
@@ -179,8 +169,6 @@ static struct class_attribute vhost_fs_global_attrs[] = {
 	 * vhost. */
 	__ATTR(cycles, S_IRUSR | S_IRGRP| S_IROTH,
 			vhost_fs_get_cycles, NULL),
-//	/* Reading returns the status of vhost. */
-//	__ATTR(status, S_IRUSR | S_IRGRP| S_IROTH, vhost_fs_status, NULL)
 };
 
 DECLARE_VHOST_FS_SHOW(vhost_fs_get_recent_new_workers);
@@ -216,7 +204,7 @@ DECLARE_VHOST_FS_SHOW(vhost_fs_worker_get_ksoftirq_time_clock_t);
 DECLARE_VHOST_FS_SHOW(vhost_fs_worker_get_total_ksoftirqs);
 DECLARE_VHOST_FS_SHOW(vhost_fs_worker_get_pid);
 DECLARE_VHOST_FS_SHOW(vhost_fs_worker_get_dev_list);
-
+DECLARE_VHOST_FS_SHOW(vhost_fs_worker_get_stats_ptr);
 
 /* per worker attributes */
 static struct dev_ext_attribute vhost_fs_per_worker_attrs[] = {
@@ -300,6 +288,8 @@ static struct dev_ext_attribute vhost_fs_per_worker_attrs[] = {
 	  * this worker. */
 	{__ATTR(dev_list, S_IRUSR | S_IRGRP | S_IROTH, vhost_fs_worker_get_dev_list,
 			NULL), NULL},
+	{__ATTR(stats_ptr, S_IRUSR | S_IRGRP | S_IROTH, vhost_fs_worker_get_stats_ptr,
+			NULL), NULL},
 };
 
 DECLARE_VHOST_FS_SHOW(vhost_fs_device_get_worker);
@@ -313,6 +303,7 @@ DECLARE_VHOST_FS_STORE(vhost_fs_device_set_delay_per_work);
 
 DECLARE_VHOST_FS_SHOW(vhost_fs_device_get_delay_per_kbyte);
 DECLARE_VHOST_FS_STORE(vhost_fs_device_set_delay_per_kbyte);
+DECLARE_VHOST_FS_SHOW(vhost_fs_device_get_stats_ptr);
 
 /* device attributes */
 static struct dev_ext_attribute vhost_fs_device_attrs[] = {
@@ -338,17 +329,24 @@ static struct dev_ext_attribute vhost_fs_device_attrs[] = {
 			vhost_fs_device_get_delay_per_kbyte,
 			vhost_fs_device_set_delay_per_kbyte), NULL},
 
+	VHOST_FS_DEVICE_STAT_READONLY_ATTR(device_move_total, stats.device_move_total),
+	VHOST_FS_DEVICE_STAT_READONLY_ATTR(device_detach, stats.device_detach),
+	VHOST_FS_DEVICE_STAT_READONLY_ATTR(device_attach, stats.device_attach),
+	VHOST_FS_DEVICE_STAT_READONLY_ATTR(device_move_count, stats.device_move_count),
+
 	/* Reading returns the pid of the owner thread. */
 	{__ATTR(owner, S_IRUSR | S_IRGRP | S_IROTH, vhost_fs_device_get_owner, NULL), NULL},
 	/* Reading returns a '\n' separated list of ids of queues contained in the
 	 * device. */
-	{__ATTR(vq_list, S_IRUSR | S_IRGRP | S_IROTH, vhost_fs_device_get_vq_list, NULL), NULL}
+	{__ATTR(vq_list, S_IRUSR | S_IRGRP | S_IROTH, vhost_fs_device_get_vq_list, NULL), NULL},
+	{__ATTR(stats_ptr, S_IRUSR | S_IRGRP | S_IROTH, vhost_fs_device_get_stats_ptr, NULL), NULL}
 };
 
 DECLARE_VHOST_FS_SHOW(vhost_fs_queue_get_poll);
 DECLARE_VHOST_FS_STORE(vhost_fs_queue_set_poll);
 DECLARE_VHOST_FS_SHOW(vhost_fs_queue_get_can_poll);
 DECLARE_VHOST_FS_SHOW(vhost_fs_queue_get_device);
+DECLARE_VHOST_FS_SHOW(vhost_fs_queue_get_stats_ptr);
 
 /* queue attributes */
 static struct dev_ext_attribute vhost_fs_queue_attrs[] = {
@@ -455,8 +453,34 @@ static struct dev_ext_attribute vhost_fs_queue_attrs[] = {
 	/* Reading returns the id of the device this queue is contained in. */
 	{__ATTR(dev, S_IRUSR | S_IRGRP | S_IROTH, vhost_fs_queue_get_device, NULL),
 	NULL},
+	{__ATTR(stats_ptr, S_IRUSR | S_IRGRP | S_IROTH, vhost_fs_queue_get_stats_ptr,
+	NULL), NULL},
 };
 
+struct vhost_fs_status_struct {
+	const char * tag;
+	struct dev_ext_attribute *attrs;
+	size_t attrs_count;
+};
+DECLARE_VHOST_FS_SHOW(vhost_fs_status);
+
+static struct vhost_fs_status_struct vhost_fs_per_worker_status =
+	{"worker", vhost_fs_per_worker_attrs, ARRAY_LENGTH(vhost_fs_per_worker_attrs)};
+static struct dev_ext_attribute vhost_fs_per_worker_status_attr =
+	{__ATTR(status, S_IRUSR | S_IRGRP | S_IROTH, vhost_fs_status, NULL),
+	 &vhost_fs_per_worker_status};
+
+static struct vhost_fs_status_struct vhost_fs_device_status =
+	{"device", vhost_fs_device_attrs, ARRAY_LENGTH(vhost_fs_device_attrs)};
+static struct dev_ext_attribute vhost_fs_device_status_attr =
+	{__ATTR(status, S_IRUSR | S_IRGRP | S_IROTH, vhost_fs_status, NULL),
+	 &vhost_fs_device_status};
+
+static struct vhost_fs_status_struct vhost_fs_queue_status =
+	{"queue", vhost_fs_queue_attrs, ARRAY_LENGTH(vhost_fs_queue_attrs)};
+static struct dev_ext_attribute vhost_fs_queue_status_attr =
+	{__ATTR(status, S_IRUSR | S_IRGRP | S_IROTH, vhost_fs_status, NULL),
+	 &vhost_fs_queue_status};
 
 /* The worker states */
 enum {
@@ -1352,10 +1376,36 @@ static void vhost_vq_free_iovecs(struct vhost_virtqueue *vq)
 	vq->heads = NULL;
 }
 
+ssize_t vhost_fs_status(struct device *dev, struct device_attribute *attr,
+		char *buf){
+	int i = 0;
+	int res = 0;
+	ssize_t length = 0;
+	struct dev_ext_attribute *ea;
+	struct vhost_fs_status_struct *status = NULL;
+
+	ea = container_of(attr, struct dev_ext_attribute, attr);
+	status = (struct vhost_fs_status_struct *)ea->var;
+	for (; i < status->attrs_count; ++i){
+		if (status->attrs[i].attr.show == NULL)
+			continue;
+		length += sprintf(buf + length, "%s:", status->attrs[i].attr.attr.name);
+		if (IS_ERR_VALUE(res = status->attrs[i].attr.show(dev, &status->attrs[i].attr,
+				buf + length))){
+			return res;
+		}
+		length += res;
+		if (res == 0) {
+			length += sprintf(buf + length, "\n");
+		}
+	}
+	return length;
+}
+
 static void vhost_fs_dir_init(void *owner, struct device **vhost_fs_dev,
 		struct device *parent,
 		struct dev_ext_attribute *attrs,
-		size_t attrs_count,
+		size_t attrs_count, struct dev_ext_attribute *status,
 		const char *fmt, ...) {
 	int i = 0;
 	va_list vargs;
@@ -1385,31 +1435,57 @@ static void vhost_fs_dir_init(void *owner, struct device **vhost_fs_dev,
 			return;
 		}
 	}
+ 
+	if (status != NULL){
+		int res = 0;
+		struct vhost_fs_status_struct *s = (struct vhost_fs_status_struct *)(status->var);
+		vhost_printk("start creating status file\n");
+		vhost_printk("struct vhost_fs_status_struct *s = %p.\n", s);
+		vhost_printk("tag %s.\n", s->tag);
+		vhost_printk("attrs %p expected %p.\n", s->attrs, attrs);
+		vhost_printk("attrs_count %lu expected %lu.\n", s->attrs_count, attrs_count);
+		vhost_printk("creating file %s.\n", status->attr.attr.name);
+
+		res = device_create_file(*vhost_fs_dev, &(status->attr));
+		if (res < 0) {
+			WARN(res < 0, "couldn't create class file status, err = %d.\n", res);
+			vhost_printk("DONE - ERROR.");
+			return;
+		}
+	}
 }
 
 #define vhost_fs_init_per_worker_dir(w) \
 		vhost_fs_dir_init(w, &w->vhost_fs_dev, vhost_fs_workers,			  \
 						  vhost_fs_per_worker_attrs,						  \
-						  ARRAY_LENGTH(vhost_fs_per_worker_attrs), "w.%d", w->id)
+						  ARRAY_LENGTH(vhost_fs_per_worker_attrs),            \
+						  &vhost_fs_per_worker_status_attr, "w.%d", w->id)
 #define vhost_fs_init_device_dir(d) \
 		vhost_fs_dir_init(d, &d->vhost_fs_dev, vhost_fs_devices,			  \
 						  vhost_fs_device_attrs,							  \
-						  ARRAY_LENGTH(vhost_fs_device_attrs), "d.%d", d->id)
+						  ARRAY_LENGTH(vhost_fs_device_attrs),                            \
+						  &vhost_fs_device_status_attr, "d.%d", d->id)
 #define vhost_fs_init_virtual_queue_dir(vq) \
 	do{																		  \
 		typeof(vq) __temp_vq_ptr = vq;										  \
 		vhost_fs_dir_init(__temp_vq_ptr, &__temp_vq_ptr->vhost_fs_dev, 		  \
 				vhost_fs_queues, 	 										  \
 				vhost_fs_queue_attrs, ARRAY_LENGTH(vhost_fs_queue_attrs), 	  \
+                                &vhost_fs_queue_status_attr,      \
 				"vq.%d.%d", __temp_vq_ptr->dev->id,							  \
 				__temp_vq_ptr->id);											  \
 	}while(0)
 
 static void vhost_fs_dir_exit(struct device *vhost_fs_dev,
-		struct dev_ext_attribute *attrs, size_t attrs_count) {
+		struct dev_ext_attribute *attrs, size_t attrs_count,
+		struct dev_ext_attribute *status) {
 	int i=0;
 	for (; i < attrs_count; ++i){
 		device_remove_file(vhost_fs_dev, &attrs[i].attr);
+	}
+	if (status != NULL){
+		vhost_printk("removing status file.");
+		device_remove_file(vhost_fs_dev, &(status->attr));
 	}
 
 	// Releasing the device directory
@@ -1418,15 +1494,18 @@ static void vhost_fs_dir_exit(struct device *vhost_fs_dev,
 
 #define vhost_fs_exit_per_worker_dir(w) \
 	vhost_fs_dir_exit(w->vhost_fs_dev, vhost_fs_per_worker_attrs,		  \
-			ARRAY_LENGTH(vhost_fs_per_worker_attrs))
+			ARRAY_LENGTH(vhost_fs_per_worker_attrs), \
+			&vhost_fs_per_worker_status_attr)
 #define vhost_fs_exit_device_dir(d) \
 	vhost_fs_dir_exit(d->vhost_fs_dev, vhost_fs_device_attrs,			  \
-			ARRAY_LENGTH(vhost_fs_device_attrs))
+			ARRAY_LENGTH(vhost_fs_device_attrs), \
+			&vhost_fs_device_status_attr)
 #define vhost_fs_exit_virtual_queue_dir(vq)  \
 	do{																		  \
 		typeof(vq) __temp_vq_ptr = vq;										  \
 		vhost_fs_dir_exit(__temp_vq_ptr->vhost_fs_dev, 						  \
-				vhost_fs_queue_attrs, ARRAY_LENGTH(vhost_fs_queue_attrs));	  \
+				vhost_fs_queue_attrs, ARRAY_LENGTH(vhost_fs_queue_attrs), \
+				&vhost_fs_queue_status_attr);	  \
 	}while(0)
 
 static void vhost_fs_init(void) {
@@ -1454,15 +1533,15 @@ static void vhost_fs_init(void) {
 	// add workers directory and global files
 	vhost_fs_dir_init(NULL, &vhost_fs_workers, NULL,
 			vhost_fs_global_worker_attrs,
-			ARRAY_LENGTH(vhost_fs_global_worker_attrs),
+			ARRAY_LENGTH(vhost_fs_global_worker_attrs), NULL,
 			"%s", VHOST_FS_DIRECTORY_WORKER);
 
 	// add device directory and global files
-	vhost_fs_dir_init(NULL, &vhost_fs_devices, NULL, NULL, 0,
+	vhost_fs_dir_init(NULL, &vhost_fs_devices, NULL, NULL, 0, NULL,
 			"%s", VHOST_FS_DIRECTORY_DEVICE);
 
 	// add device directory and global files
-	vhost_fs_dir_init(NULL, &vhost_fs_queues, NULL, NULL, 0,
+	vhost_fs_dir_init(NULL, &vhost_fs_queues, NULL, NULL, 0, NULL,
 				"%s", VHOST_FS_DIRECTORY_VIRTUAL_QUEUE);
 }
 
@@ -1477,11 +1556,11 @@ static void vhost_fs_exit(void) {
 
 	// Remove workers directory and global files
 	vhost_fs_dir_exit(vhost_fs_workers, vhost_fs_global_worker_attrs,
-			ARRAY_LENGTH(vhost_fs_global_worker_attrs));
+			ARRAY_LENGTH(vhost_fs_global_worker_attrs), NULL);
 	// Remove devices directory and global files
-	vhost_fs_dir_exit(vhost_fs_devices, NULL, 0);
+	vhost_fs_dir_exit(vhost_fs_devices, NULL, 0, NULL);
 	// Remove queues directory and global files
-	vhost_fs_dir_exit(vhost_fs_queues, NULL, 0);
+	vhost_fs_dir_exit(vhost_fs_queues, NULL, 0, NULL);
 	class_destroy(vhost_fs_class);
 }
 
@@ -1551,6 +1630,7 @@ static void vhost_detach_device_from_worker(struct vhost_work *transfer_work){
 static int vhost_dev_transfer_to_worker(struct vhost_dev *d,
 		struct vhost_worker* w){
 	struct vhost_dev_transfer_struct transfer;
+	u64 start, cur, end;
 
 	BUG_ON(d == NULL);
 	BUG_ON(d->worker == NULL);
@@ -1565,6 +1645,7 @@ static int vhost_dev_transfer_to_worker(struct vhost_dev *d,
 		vhost_printk("Error device %d already in transfer\n", d->id);
 		return 0;
 	}
+	rdtscll(start);
 	transfer.device = d;
 	transfer.src_worker = d->worker;
 	transfer.dst_worker = w;
@@ -1572,15 +1653,23 @@ static int vhost_dev_transfer_to_worker(struct vhost_dev *d,
 	vhost_work_init(&transfer.work, NULL, vhost_detach_device_from_worker);
 	vhost_work_force_enqueue(d->worker, &transfer.work);
 	vhost_work_flush(d, &transfer.work);
+	rdtscll(cur);
+	d->stats.device_detach += cur - start;
 
 	BUG_ON(d->worker != w);
 	BUG_ON(atomic_read(&d->transfer.operation_mode) !=
 			VHOST_DEVICE_OPERATION_MODE_TRANSFERRING);
 
+	rdtscll(cur);
 	/* Place the vhost_attach_device_to_worker in the dest worker work_list */
 	vhost_work_init(&transfer.work, NULL, vhost_attach_device_to_worker);
 	vhost_work_force_enqueue(w, &transfer.work);
 	vhost_work_flush(d, &transfer.work);
+
+	rdtscll(end);
+	d->stats.device_attach += end - cur;
+	d->stats.device_move_total += end - start;
+	d->stats.device_move_count++;
 	return 1;
 }
 
@@ -3477,118 +3566,6 @@ static ssize_t vhost_fs_get_cycles(struct class *class,
 	return length;
 }
 
-//static ssize_t vhost_fs_status(struct class *class, struct class_attribute *attr,
-//		char *buf);
-//
-//static ssize_t vhost_fs_show_all_class_attributes(struct class *class,
-//		struct class_attribute *attrs, size_t attrs_count, char *buf){
-//	int i = 0;
-//	int error;
-//	ssize_t length = 0;
-//	length = sprintf(buf, "%s:\n", class->name);
-//	for (; i < attrs_count; ++i){
-//		if (attrs[i].show == NULL || attrs[i].show == vhost_fs_status)
-//			continue;
-//		length += sprintf(buf + length, "%s:", attrs[i].attr.name);
-//		if (IS_ERR_VALUE(error = attrs[i].show(class, &attrs[i], buf + length)))
-//			return error;
-//
-//		length += error;
-////		length += sprintf(buf + length, "\n");
-//	}
-//	return length;
-//}
-//
-//struct vhost_fs_status_struct {
-//	char *buf;
-//	ssize_t length;
-//
-//	struct dev_ext_attribute *attrs;
-//	size_t attrs_count;
-//};
-//
-//static int vhost_fs_show_all_dir_attributes(struct device *dev, void *data){
-//	struct vhost_fs_status_struct *status = (struct vhost_fs_status_struct *)data;
-//	int i = 0;
-//	int res;
-//	status->length += sprintf(status->buf + status->length, "%s:\n", dev_name(dev));
-//	for (; i < status->attrs_count; ++i){
-//		if (status->attrs[i].attr.show == NULL)
-//			continue;
-//		status->length += sprintf(status->buf + status->length, "%s:",
-//				status->attrs[i].attr.attr.name);
-//		if (IS_ERR_VALUE(res = status->attrs[i].attr.show(dev, &status->attrs[i].attr,
-//				status->buf + status->length))){
-//			return res;
-//		}
-//		status->length += res;
-//	}
-//	return 0;
-//}
-//
-//static ssize_t vhost_fs_status(struct class *class, struct class_attribute *attr,
-//		char *buf){
-//	ssize_t length = 0;
-//	int res;
-//	struct vhost_fs_status_struct status;
-//
-//	vhost_printk("START\n");
-//	// print global attributes
-//	if (IS_ERR_VALUE(res = vhost_fs_show_all_class_attributes(class,
-//			vhost_fs_global_attrs,
-//			ARRAY_LENGTH(vhost_fs_global_attrs), buf + length))){
-//		return res;
-//	}
-//	length += res;
-//	vhost_printk("length = %ld\n", length);
-//	// print global workers attributes
-//	status.buf = buf + length;
-//	status.length = 0;
-//	status.attrs = vhost_fs_global_worker_attrs;
-//	status.attrs_count = ARRAY_LENGTH(vhost_fs_global_worker_attrs);
-//	if (IS_ERR_VALUE(res = vhost_fs_show_all_dir_attributes(vhost_fs_workers,
-//			&status))){
-//		return res;
-//	}
-//	length += status.length;
-//	vhost_printk("length = %ld\n", length);
-//	// print each worker attributes
-//	status.buf = buf + length;
-//	status.length = 0;
-//	status.attrs = vhost_fs_per_worker_attrs;
-//	status.attrs_count = ARRAY_LENGTH(vhost_fs_per_worker_attrs);
-//	if (IS_ERR_VALUE(res = device_for_each_child(vhost_fs_workers, &status,
-//			vhost_fs_show_all_dir_attributes))){
-//		return res;
-//	}
-//	length += status.length;
-//	vhost_printk("length = %ld\n", length);
-//	// print each device attributes
-//	status.buf = buf + length;
-//	status.length = 0;
-//	status.attrs = vhost_fs_device_attrs;
-//	status.attrs_count = ARRAY_LENGTH(vhost_fs_device_attrs);
-//	if (IS_ERR_VALUE(res = device_for_each_child(vhost_fs_devices, &status,
-//			vhost_fs_show_all_dir_attributes))){
-//		return res;
-//	}
-//	length += status.length;
-//	vhost_printk("length = %ld\n", length);
-//	// print each queue attributes
-//	status.buf = buf+length;
-//	status.length = 0;
-//	status.attrs = vhost_fs_queue_attrs;
-//	status.attrs_count = ARRAY_LENGTH(vhost_fs_queue_attrs);
-//	if (IS_ERR_VALUE(res = device_for_each_child(vhost_fs_queues, &status,
-//			vhost_fs_show_all_dir_attributes))){
-//		return res;
-//	}
-//	length += status.length;
-//
-//	vhost_printk("DONE! length = %ld\n", length);
-//	return length;
-//}
-
 ssize_t vhost_fs_get_recent_new_workers(struct device *dev,
 		struct device_attribute *attr, char *buf){
 	ssize_t length = 0;
@@ -3941,6 +3918,36 @@ ssize_t vhost_fs_queue_get_device(struct device *dir,
 	ssize_t length = 0;
 	struct vhost_virtqueue *vq = (struct vhost_virtqueue *)dev_get_drvdata(dir);
 	length = sprintf(buf, "d.%d\n", vq->dev->id);
+	return length;
+}
+
+ssize_t vhost_fs_worker_get_stats_ptr(struct device *dir,
+	struct device_attribute *attr, char *buf){
+	ssize_t length = 0;
+	struct vhost_worker *w = (struct vhost_worker *)dev_get_drvdata(dir);
+	// vhost_printk("START: dev.%d\n", w->id);
+	length = sprintf(buf, "%p\n", &w->stats);
+	// vhost_printk("DONE!\npage = %s length = %ld\n", buf, length);
+	return length;
+}
+
+ssize_t vhost_fs_device_get_stats_ptr(struct device *dir,
+	struct device_attribute *attr, char *buf){
+	ssize_t length = 0;
+	struct vhost_dev *dev = (struct vhost_dev *)dev_get_drvdata(dir);
+	// vhost_printk("START: dev.%d\n", dev->id);
+	length = sprintf(buf, "%p\n", &dev->stats);
+	// vhost_printk("DONE!\npage = %s length = %ld\n", buf, length);
+	return length;
+}
+
+ssize_t vhost_fs_queue_get_stats_ptr(struct device *dir,
+	struct device_attribute *attr, char *buf){
+	ssize_t length = 0;
+	struct vhost_virtqueue *vq = (struct vhost_virtqueue *)dev_get_drvdata(dir);
+	// vhost_printk("START: vq.%d.%ld\n", vq->dev->id, vq - vq->dev->vqs);
+	length = sprintf(buf, "%p\n", &vq->stats);
+	// vhost_printk("DONE!\npage = %s length = %ld\n", buf, length);
 	return length;
 }
 
