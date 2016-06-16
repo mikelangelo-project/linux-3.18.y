@@ -686,21 +686,21 @@ static struct vhost_work *vhost_work_dequeue(struct vhost_worker* worker,
 		int can_choose_non_stuck){
 	struct vhost_work *work;
 	u64 tsc;
+	u64 cycles_pending;
 	if (list_empty(&worker->work_list)) {
 		return NULL;
 	}
-	rdtscll(tsc);
-	list_for_each_entry(work, &worker->work_list, node) {
-		u64 cycles_pending = tsc - work->arrival_cycles;
-		if (likely(work->vq && cycles_pending < work->vq->vqpoll.max_stuck_cycles) ||
-			(!work->vq && cycles_pending < worker->work_list_max_stuck_cycles)){
-			/* The work didn't pend more then the allowed cycles. */
-			continue;
-		}
+	work = list_first_entry(&worker->work_list, struct vhost_work, node);
+	if (can_choose_non_stuck){
 		return work;
 	}
-	return (!can_choose_non_stuck)? NULL:
-			list_first_entry(&worker->work_list, struct vhost_work, node);
+	rdtscll(tsc);
+	cycles_pending = tsc - work->arrival_cycles;
+	if (unlikely(worker->work_list_max_stuck_cycles >=0 &&
+		cycles_pending < worker->work_list_max_stuck_cycles)) {
+		return work;
+	}
+	return NULL;
 }
 /*
  * Add @work to the work list of the worker thread in-charge of the device @dev.

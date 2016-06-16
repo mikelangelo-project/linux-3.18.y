@@ -183,8 +183,8 @@ struct vhost_virtqueue {
 
 		u64 almost_full_times; /* the number of times the queue was almost full  */
 		
-		u64 ksoftirq_occurrences; /* number of times a softirq occured during the processing of this queue */
-		u64 ksoftirq_time; /* time (ns) that softirq occured during the processing of this queue */
+		u64 ksoftirq_occurrences; /* number of times a softirq occurred during the processing of this queue */
+		u64 ksoftirq_time; /* time (ns) that softirq occurred during the processing of this queue */
 		u64 ksoftirqs; /* the number of softirq interruts handled during the processing of this queue */
 		
 		u64 handle_tx_calls;
