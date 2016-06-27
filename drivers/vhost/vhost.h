@@ -16,11 +16,19 @@
 #include <linux/device.h>
 #include <linux/delay.h>
 
+#if 0
 #define vhost_warn(msg, ...) \
 	WARN(1, "vhost-debug: %s:%d: "msg"\n", __FUNCTION__, __LINE__, ##__VA_ARGS__)
 
 #define vhost_printk(msg, ...) \
 	printk("vhost-debug: %s:%d: "msg"\n", __FUNCTION__, __LINE__, ##__VA_ARGS__)
+
+#define read_tsc(x) rdtscll(x)
+#else
+#define vhost_warn(msg, ...)
+#define vhost_printk(msg, ...)
+#define read_tsc(x)
+#endif
 
 struct vhost_device;
 struct vhost_work;
