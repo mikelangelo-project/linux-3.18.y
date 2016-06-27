@@ -42,28 +42,23 @@ MODULE_PARM_DESC(virtual_queue_default_min_poll_rate,
 		"Note: This is designed for non-latency sensitive queues, when we want "
 		"to avoid sending a lot of virtual interrupts to the guest.");
 
-static int worker_work_list_default_max_stuck_cycles = 0;
+static int worker_work_list_default_max_stuck_cycles = -1;
 module_param(worker_work_list_default_max_stuck_cycles, int, S_IRUGO|S_IWUSR);
 MODULE_PARM_DESC(worker_work_list_default_max_stuck_cycles, "How many cycles "
 		"need to elapse to consider the worker work_list stuck "
-		"(0 = disabled)");
+		"(-1 = disabled)");
 
-static int virtual_queue_default_max_stuck_cycles = 0;
+static int virtual_queue_default_max_stuck_cycles = -1;
 module_param(virtual_queue_default_max_stuck_cycles, int, S_IRUGO|S_IWUSR);
 MODULE_PARM_DESC(virtual_queue_default_max_stuck_cycles, "The default number "
 		"of cycles need to elapse in order to consider a queue as stuck "
-		"(0 = disabled)");
+		"(-1 = disabled)");
 
 static int virtual_queue_default_max_stuck_pending_items = 0;
 module_param(virtual_queue_default_max_stuck_pending_items, int, S_IRUGO|S_IWUSR);
 MODULE_PARM_DESC(virtual_queue_default_max_pending_items, "The default "
 		"maximum number of items pending in the queue in order to consider a "
 		"queue as stuck (0 = disabled)");
-
-static int virtual_queue_max_almost_full_pending_items = 0;
-module_param(virtual_queue_max_almost_full_pending_items, int, S_IRUGO|S_IWUSR);
-MODULE_PARM_DESC(virtual_queue_max_almost_full_pending_items, "The default maximum number"
-		"of pending items in the queue to consider it almost full (0 = disabled)");
 
 static int worker_default_disable_soft_interrupts_cycles = 0;
 module_param(worker_default_disable_soft_interrupts_cycles, int, S_IRUGO|S_IWUSR);
@@ -383,9 +378,6 @@ static struct dev_ext_attribute vhost_fs_queue_attrs[] = {
 	/* Reading returns the number of times the queue was limited by netweight in
 	 * notif mode */
 	VHOST_FS_QUEUE_STAT_READONLY_ATTR(notif_limited, stats.notif_limited),
-	/* Reading returns the number of times we saw that a queue was almost full
-	   and we switched to it. */
-	VHOST_FS_QUEUE_STAT_READONLY_ATTR(almost_full_times, stats.almost_full_times),
 
 	/* Reading returns the number of times the ring was full */
 	VHOST_FS_QUEUE_STAT_READONLY_ATTR(ring_full, stats.ring_full),
@@ -418,15 +410,11 @@ static struct dev_ext_attribute vhost_fs_queue_attrs[] = {
 	 * Reading returns the current value. */
 	VHOST_FS_QUEUE_STAT_ATTR(max_stuck_pending_items, vqpoll.max_stuck_pending_items),
 	/* Writing sets the number of need to elapse without service to consider
-	 * the queue stuck (disable = 0).
+	 * the queue stuck (disable = -1).
 	 * Reading returns the current value. */
 	VHOST_FS_QUEUE_STAT_ATTR(max_stuck_cycles, vqpoll.max_stuck_cycles),
 	/* Reading returns the end of the last polling in cycles. */
 	VHOST_FS_QUEUE_STAT_READONLY_ATTR(last_poll_cycles, stats.last_poll_tsc_end),
-	/* Writing sets the number of pending items to consider the queue as almost full
-	 * (disable = 0).
-	 * Reading returns the current value. */
-	VHOST_FS_QUEUE_STAT_ATTR(max_almost_full_pending_items, vqpoll.max_almost_full_pending_items),
 
 	/* Writing sets the minimum rate in which a polled queue can be polled
 	 * (disable = 0).
@@ -437,19 +425,14 @@ static struct dev_ext_attribute vhost_fs_queue_attrs[] = {
 	{__ATTR(can_poll, S_IRUSR | S_IRGRP | S_IROTH, vhost_fs_queue_get_can_poll, NULL),
 	NULL},
 	/* Reading returns the number of softirq interruts handled during worker processed its work. */
-	VHOST_FS_QUEUE_STAT_READONLY_ATTR(ksoftirqs, stats.ksoftirqs),	
+	VHOST_FS_QUEUE_STAT_READONLY_ATTR(ksoftirqs, stats.ksoftirqs),
 	/* Reading returns number of times a softirq occured during the worker's work. */
-	VHOST_FS_QUEUE_STAT_READONLY_ATTR(ksoftirq_occurrences, 
+	VHOST_FS_QUEUE_STAT_READONLY_ATTR(ksoftirq_occurrences,
 		stats.ksoftirq_occurrences),
-	/* Reading returns the time (ns) that softirq process took while worker 
+	/* Reading returns the time (ns) that softirq process took while worker
 	 * processed its work. */
-	VHOST_FS_QUEUE_STAT_READONLY_ATTR(ksoftirq_time, stats.ksoftirq_time),	
-		VHOST_FS_QUEUE_STAT_READONLY_ATTR(handle_tx_calls, stats.handle_tx_calls),
-		VHOST_FS_QUEUE_STAT_READONLY_ATTR(sendmsg_calls, stats.sendmsg_calls),
-		VHOST_FS_QUEUE_STAT_READONLY_ATTR(aggregated_time_between_handle_tx_calls, stats.aggregated_time_between_handle_tx_calls),
-		VHOST_FS_QUEUE_STAT_READONLY_ATTR(aggregated_time_between_sendmsg_calls, stats.aggregated_time_between_sendmsg_calls),
-		VHOST_FS_QUEUE_STAT_READONLY_ATTR(last_handle_tx_call, stats.last_handle_tx_call),
-		VHOST_FS_QUEUE_STAT_READONLY_ATTR(last_sendmsg_call, stats.last_sendmsg_call),
+	VHOST_FS_QUEUE_STAT_READONLY_ATTR(ksoftirq_time, stats.ksoftirq_time),
+
 	/* Reading returns the id of the device this queue is contained in. */
 	{__ATTR(dev, S_IRUSR | S_IRGRP | S_IROTH, vhost_fs_queue_get_device, NULL),
 	NULL},
@@ -702,7 +685,7 @@ static void vhost_work_force_enqueue(struct vhost_worker* worker,
 		wake_up_process(worker->worker_thread);
 	} else {
 		spin_unlock(&work->lock);
-		spin_unlock_irqrestore(&worker->work_lock, flags);	
+		spin_unlock_irqrestore(&worker->work_lock, flags);
 	}
 }
 
@@ -921,7 +904,6 @@ static void vhost_vq_reset(struct vhost_dev *dev,
 	vq->vqpoll.max_stuck_cycles = virtual_queue_default_max_stuck_cycles;
 	vq->vqpoll.max_stuck_pending_items = virtual_queue_default_max_stuck_pending_items;
 	vq->vqpoll.last_pending_items = 0;
-	vq->vqpoll.max_almost_full_pending_items = virtual_queue_max_almost_full_pending_items;
 	vq->min_processed_data_limit = 1500;
 	vq->max_processed_data_limit = 524288;
 	vq->vqpoll.min_poll_rate = virtual_queue_default_min_poll_rate;
@@ -976,7 +958,7 @@ static struct vhost_virtqueue *roundrobin_poll(struct list_head *list) {
 	WARN_ON(!vq->vqpoll.enabled);
 	list_move_tail(&vq->vqpoll.link, list);
 	WARN_ON(list_empty(list));
-	
+
 	/* If poll_coalescing_rate is set, avoid kicking the same vq too often */
 	if (vq->vqpoll.min_poll_rate > 0) {
 		if (vq->vqpoll.min_poll_rate > tsc - vq->stats.last_poll_tsc_end){
@@ -1004,7 +986,7 @@ static struct vhost_virtqueue *roundrobin_poll(struct list_head *list) {
 	if (vq->stats.last_poll_empty_tsc == 0)
 		vq->stats.last_poll_empty_tsc = tsc;
 
-	return NULL;    
+	return NULL;
 }
 
 /*
@@ -1201,7 +1183,7 @@ static int vhost_worker_thread(void *data)
 			if (work->flushing)
 				wake_up_all(&work->done);
 			spin_unlock_irq(&work->lock);
-		}               
+		}
 
 //		if (kthread_should_stop()) {
 //			spin_unlock_irq(&worker->work_lock);
@@ -1247,12 +1229,12 @@ static int vhost_worker_thread(void *data)
 				if (softirq_diff > 0){
 					worker->stats.ksoftirq_occurrences++;
 					worker->stats.ksoftirq_time += softirq_diff_time;
-					worker->stats.ksoftirqs += softirq_diff;	
+					worker->stats.ksoftirqs += softirq_diff;
 
 					vq->stats.ksoftirq_occurrences++;
 					vq->stats.ksoftirq_time += softirq_diff_time;
-					vq->stats.ksoftirqs += softirq_diff;			
-				}				
+					vq->stats.ksoftirqs += softirq_diff;
+				}
 				vq->stats.notif_cycles += (work_end_tsc - work_start_tsc);
 				worker->stats.notif_cycles += (work_end_tsc - work_start_tsc);
 				worker->stats.total_work_cycles += (work_end_tsc - work_start_tsc);
@@ -1304,10 +1286,10 @@ static int vhost_worker_thread(void *data)
 
 				vq->stats.ksoftirq_occurrences++;
 				vq->stats.ksoftirq_time += softirq_diff_time;
-				vq->stats.ksoftirqs += softirq_diff;					
-			}				
+				vq->stats.ksoftirqs += softirq_diff;
+			}
 			vq->stats.poll_cycles+=(poll_end_tsc-poll_start_tsc);
-			worker->stats.poll_cycles+=(poll_end_tsc-poll_start_tsc);		
+			worker->stats.poll_cycles+=(poll_end_tsc-poll_start_tsc);
 			worker->stats.total_work_cycles+=(poll_end_tsc-poll_start_tsc);
 			if (likely(vq->stats.poll_kicks++ > 0))
 				vq->stats.poll_wait+=(poll_start_tsc-vq->stats.last_poll_tsc_end);
@@ -2206,7 +2188,6 @@ long vhost_dev_set_owner(struct vhost_dev *dev)
 
 	return 0;
 err_cgroup:
-	kthread_stop(worker);
 	dev->worker = NULL;
 err_mm:
 	return err;
@@ -2634,6 +2615,10 @@ long vhost_vring_ioctl(struct vhost_dev *d, int ioctl, void __user *argp)
 		vq->avail = (void __user *)(unsigned long)a.avail_user_addr;
 		vq->log_addr = a.log_guest_addr;
 		vq->used = (void __user *)(unsigned long)a.used_user_addr;
+		// TODO: if vq->vqpoll.avail_mapped is non-zero, we need
+		// to recalculate it based on the new vq->avail.
+		if (vq->vqpoll.avail_mapped)
+			printk_vq("WARN: unhandled vq->avail change", vq);
 		break;
 	case VHOST_SET_VRING_KICK:
 		vhost_printk("VHOST_SET_VRING_KICK\n");
