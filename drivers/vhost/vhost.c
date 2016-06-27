@@ -996,15 +996,40 @@ static struct vhost_virtqueue *roundrobin_poll(struct list_head *list) {
  * processing data. If no stuck queues were found, continue as far as the amount of data
  * processed is less than the specified limit.
  */
-static bool vhost_max_stuck_cycles_huristic(struct vhost_virtqueue  *vq, 
-	struct list_head *worker_vqs_list){
+bool vhost_can_continue(struct vhost_virtqueue  *vq,
+		size_t processed_data) {
 	struct vhost_virtqueue *vq_iterator, *next = NULL;
+	struct vhost_worker *worker = vq->dev->worker;
+	struct list_head *list = &vq->dev->worker->vqpoll_list;
 	u64 elapsed_cycles;
 	u64 cycles;
 
+	// if we didn't process the minimum amount of data we can always continue
+	if (processed_data < vq->min_processed_data_limit){
+		return true;
+	}
+
+	// If we processed more than the maximum we can not continue
+	if (processed_data > vq->max_processed_data_limit){
+		goto cannot_continue;
+	}
+
+	vhost_printk("We processed more then the minimum and less then the maximum");
+
+	// if there are work items pending for too long we can not continue
+	if (vhost_work_dequeue(worker, 0) == NULL){
+		vhost_printk("work list items pending too long, cannot continue");
+		goto cannot_continue;
+	}
+
+	if (vq->vqpoll.max_stuck_cycles < 0) {
+		// stuck queues option is turned off
+		vhost_printk("stuck queues option is turned off");
+		return true;
+	}
 	rdtscll(cycles);
 	// check if there are stuck queues
-	list_for_each_entry_safe(vq_iterator, next, worker_vqs_list, vqpoll.link) {
+	list_for_each_entry_safe(vq_iterator, next, list, vqpoll.link) {
 		u16 pending_items;
 		int vq_id = vq_iterator->id;
 
@@ -1058,97 +1083,29 @@ static bool vhost_max_stuck_cycles_huristic(struct vhost_virtqueue  *vq,
 			continue;
 		}
 
+
 		// is the queue stuck for too long ?
 		if (elapsed_cycles >= vq_iterator->vqpoll.max_stuck_cycles) {
+			// put current queue in the 2nd place if it didn't send more than half of the max
+			// and it's being polled
+			if (vq->vqpoll.enabled && processed_data < vq->max_processed_data_limit / 2)
+				list_move(&vq->vqpoll.link, list);
+
 			// put stuck queue in the 1st place if it's being polled
-			list_move(&vq_iterator->vqpoll.link, worker_vqs_list);
+			list_move(&vq_iterator->vqpoll.link, list);
 			vq_iterator->stats.stuck_times++;
 			vq_iterator->stats.stuck_cycles+=elapsed_cycles;
 			vhost_printk("vq.%d.%d: is stuck moved to first position\n",
 					vq_id, vq_iterator->dev->id);
-			return false;
+			goto cannot_continue;
 		}
 	}
 
-	// no stuck queues  => we can continue
-	return true;
-}
-
-static bool vhost_full_queue_avoidance_huristic(struct vhost_virtqueue  *vq, 
-	struct list_head *worker_vqs_list){
-	struct vhost_virtqueue *vq_iterator, *next = NULL;
-
-	list_for_each_entry_safe(vq_iterator, next, worker_vqs_list, vqpoll.link) {
-		u16 pending_items;
-		int vq_id = vq->id;
-
-		// ignore the queue that is currently being processed
-		if (vq_iterator == vq) {
-			vhost_printk("ignore the queue that is currently being processed.");
-			continue;
-		}	
-
-		// ignore queues that has no pending data
-		pending_items = vq_iterator->vqpoll.avail_mapped->idx - vq_iterator->last_avail_idx;
-		vhost_printk("vq.%d.%d: pending_items: %u\n", vq_id,
-						vq_iterator->dev->id, pending_items);
-		if (likely(pending_items < vq_iterator->vqpoll.max_almost_full_pending_items)){
-			vhost_printk("the queue is not almost full.");
-			continue;
-		}
-
-		list_move(&vq_iterator->vqpoll.link, worker_vqs_list);
-		vhost_printk("vq.%d.%d: is almost full moved to first position\n",
-			vq_id, vq_iterator->dev->id);
-		return false;
-	}
-
-	// no almost full queues  => we can continue
-	return true;	
-}
-
-bool vhost_can_continue(struct vhost_virtqueue  *vq,
-		size_t processed_data) {
-	struct vhost_worker *worker = vq->dev->worker;
-	struct list_head *worker_vqs_list = &vq->dev->worker->vqpoll_list;
-
-	// if we didn't process the minimum amount of data we can always continue
-	if (processed_data < vq->min_processed_data_limit){
-		return true;
-	}
-
-	// If we processed more than the maximum we can not continue
-	if (processed_data > vq->max_processed_data_limit){
-		goto cannot_continue;
-	}
-
-	// if there are work items pending for too long we can not continue
-	if (vhost_work_dequeue(worker, 0) == NULL){
-		vhost_printk("work list items pending too long, cannot continue");
-		goto cannot_continue;
-	}
-
-	if (vq->vqpoll.max_stuck_cycles && 
-		!vhost_max_stuck_cycles_huristic(vq, worker_vqs_list)) {
-		// stuck queues option is turned off
-		vhost_printk("we have a stuck queue!");		
-		goto cannot_continue;
-	}
-
-	if (vq->vqpoll.max_almost_full_pending_items && 
-		!vhost_full_queue_avoidance_huristic(vq, worker_vqs_list)) {
-		// stuck queues option is turned off
-		vhost_printk("we have an almost full queue!");		
-		goto cannot_continue;
-	}
+	// no stuck queues, no works, no maximum  => we can continue
+	vhost_printk("no stuck queues, no works, no maximum  => we can continue");
 	return true;
 
 cannot_continue:
-	// put current queue in the 2nd place if it didn't send more than half of the max
-	// and it's being polled
-	if (vq->vqpoll.enabled && processed_data < vq->max_processed_data_limit / 2)
-		list_move(&vq->vqpoll.link, worker_vqs_list->next);
-
 	vq->stats.was_limited = 1;
 	return false;
 }
