@@ -35,6 +35,9 @@
 #include <linux/kernel_stat.h>
 #define MODULE_NAME "vhost"
 
+/* Disabling the statistics may reduce the overhead but is mandatory for the I/O manager */
+#define vhost_statistics 1
+
 static int virtual_queue_default_min_poll_rate = 0;
 module_param(virtual_queue_default_min_poll_rate, int, S_IRUGO|S_IWUSR);
 MODULE_PARM_DESC(virtual_queue_default_min_poll_rate,
@@ -678,7 +681,9 @@ static void vhost_work_force_enqueue(struct vhost_worker* worker,
 	/* check that the work was not added to any work list of any worker thread. */
 	if (list_empty(&work->node)) {
 		list_add_tail(&work->node, &worker->work_list);
+#if vhost_statistics
 		worker->stats.pending_works++;
+#endif
 		work->queue_seq++;
 		spin_unlock(&work->lock);
 		spin_unlock_irqrestore(&worker->work_lock, flags);
@@ -736,7 +741,9 @@ void vhost_work_queue(struct vhost_dev *dev, struct vhost_work *work)
 			}
 
 			list_add_tail(&work->node, &dev->transfer.suspended_work_list);
+#if vhost_statistics
 			++dev->transfer.suspended_works;
+#endif
 			++work->queue_seq;
 		}
 		spin_unlock(&work->lock);
@@ -845,8 +852,10 @@ static void vhost_vq_disable_vqpoll_unsafe(struct vhost_virtqueue *vq){
 		return; /* already disabled, nothing to do */
 	}
 	vq->vqpoll.enabled = false;
+#if vhost_statistics
 	/* stop measuring cycles the queue was empty while polling */
 	vq->stats.last_poll_empty_tsc = 0;
+#endif
 
 	if (!list_empty(&vq->vqpoll.link)) {
 		/* vq is on the polling list, remove it from this list and
@@ -907,7 +916,9 @@ static void vhost_vq_reset(struct vhost_dev *dev,
 	vq->min_processed_data_limit = 1500;
 	vq->max_processed_data_limit = 524288;
 	vq->vqpoll.min_poll_rate = virtual_queue_default_min_poll_rate;
+#if vhost_statistics
 	memset(&vq->stats, 0, sizeof(vq->stats));
+#endif
 }
 
 /* Switch the current kernel thread's mm context (page tables) to the given
@@ -917,7 +928,9 @@ static inline void set_mm(struct vhost_virtqueue *vq) {
 	struct mm_struct *mm = vq->dev->mm;
 	if (current->mm != mm) {
 		use_mm(mm);
+#if vhost_statistics
 		vq->dev->worker->stats.mm_switches++;
+#endif
 	}
 }
 
@@ -962,7 +975,9 @@ static struct vhost_virtqueue *roundrobin_poll(struct list_head *list) {
 	/* If poll_coalescing_rate is set, avoid kicking the same vq too often */
 	if (vq->vqpoll.min_poll_rate > 0) {
 		if (vq->vqpoll.min_poll_rate > tsc - vq->stats.last_poll_tsc_end){
+#if vhost_statistics
 			vq->stats.poll_coalesced++;
+#endif
 			return NULL;
 		}
 	}
@@ -972,20 +987,23 @@ static struct vhost_virtqueue *roundrobin_poll(struct list_head *list) {
 	 * reached that idx yet, don't kick... */
 	avail_idx = vq->vqpoll.avail_mapped->idx;
 	if (avail_idx != vq->last_avail_idx) {
+#if vhost_statistics
 		/* if the list was empty in previous polls calculated
 		   the cycles elapsed until we detected work */
 		if (vq->stats.last_poll_empty_tsc != 0) {
 			vq->stats.poll_empty_cycles+=(tsc-vq->stats.last_poll_empty_tsc);
 			vq->stats.last_poll_empty_tsc = 0;
 		}
+#endif
 		return vq;
 	}
+#if vhost_statistics
 	vq->stats.poll_empty++;
 	/* Remember the first time the queue was empty to measure the amount
 	   of cycles elapsed until we detect work */
 	if (vq->stats.last_poll_empty_tsc == 0)
 		vq->stats.last_poll_empty_tsc = tsc;
-
+#endif
 	return NULL;
 }
 
@@ -1093,8 +1111,10 @@ bool vhost_can_continue(struct vhost_virtqueue  *vq,
 
 			// put stuck queue in the 1st place if it's being polled
 			list_move(&vq_iterator->vqpoll.link, list);
+#if vhost_statistics
 			vq_iterator->stats.stuck_times++;
 			vq_iterator->stats.stuck_cycles+=elapsed_cycles;
+#endif
 			vhost_printk("vq.%d.%d: is stuck moved to first position\n",
 					vq_id, vq_iterator->dev->id);
 			goto cannot_continue;
@@ -1106,7 +1126,9 @@ bool vhost_can_continue(struct vhost_virtqueue  *vq,
 	return true;
 
 cannot_continue:
+#if vhost_statistics
 	vq->stats.was_limited = 1;
+#endif
 	return false;
 }
 EXPORT_SYMBOL_GPL(vhost_can_continue);
@@ -1127,10 +1149,13 @@ static int vhost_worker_thread(void *data)
 	}
 
 	for (;;) {
-		u64 loop_start_tsc, loop_end_tsc,
+		u64 loop_end_tsc;
+#if vhost_statistics
+		u64 loop_start_tsc,
 		poll_start_tsc = 0, poll_end_tsc = 0,
 		work_start_tsc = 0, work_end_tsc = 0;
 		rdtscll(loop_start_tsc);
+#endif
 		/* mb paired w/ kthread_stop */
 		set_current_state(TASK_INTERRUPTIBLE);
 
@@ -1151,7 +1176,9 @@ static int vhost_worker_thread(void *data)
 		if ((work = vhost_work_dequeue(worker, 1)) != NULL) {
 			spin_lock_irq(&work->lock);
 			list_del_init(&work->node);
+#if vhost_statistics
 			worker->stats.pending_works--;
+#endif
 			seq = work->queue_seq;
 			spin_unlock_irq(&work->lock);
 		} else if (unlikely(atomic_read(&worker->state) ==
@@ -1169,9 +1196,12 @@ static int vhost_worker_thread(void *data)
 			struct vhost_virtqueue *vq = work->vq;
 			__set_current_state(TASK_RUNNING);
 			if (vq) {
+#if vhost_statistics
 				u64 softirq_diff_time = 0;
 				u64 softirq_diff = 0;
+#endif
 				set_mm(vq);
+#if vhost_statistics
 				if (vq->avail && (vq->last_avail_idx == vq->avail->idx+1))
 					vq->stats.ring_full++;
 				vq->stats.handled_bytes = 0;
@@ -1179,7 +1209,9 @@ static int vhost_worker_thread(void *data)
 				softirq_diff_time = kcpustat_this_cpu->cpustat[CPUTIME_SOFTIRQ];
 				softirq_diff = kstat_cpu_irqs_sum(get_cpu());
 				rdtscll(work_start_tsc);
+#endif
 				work->fn(work);
+#if vhost_statistics
 				rdtscll(work_end_tsc);
 				softirq_diff_time = kcpustat_this_cpu->cpustat[CPUTIME_SOFTIRQ] - softirq_diff_time;
 				softirq_diff = kstat_cpu_irqs_sum(get_cpu()) - softirq_diff;
@@ -1201,10 +1233,13 @@ static int vhost_worker_thread(void *data)
 				vq->stats.last_notif_tsc_end = work_end_tsc;
 				vq->stats.notif_bytes+=vq->stats.handled_bytes;
 				vq->stats.notif_limited+=vq->stats.was_limited;
+#endif
 			} else {
 				vhost_printk("performing noqueue work = %p\n.", work);
 				work->fn(work);
+#if vhost_statistics
 				worker->stats.noqueue_works++;
+#endif
 			}
 			/* If vq is in the round-robin list of virtqueues being
 			 * constantly checked by this thread, move vq the end
@@ -1213,8 +1248,12 @@ static int vhost_worker_thread(void *data)
 			if (vq && !list_empty(&vq->vqpoll.link)) {
 				list_move_tail(&vq->vqpoll.link, &worker->vqpoll_list);
 			}
-		} else
+		}
+#if vhost_statistics
+		else {
 			worker->stats.empty_works++;
+		}
+#endif
 
 	/* Check one virtqueue from the round-robin list */
 	if (!list_empty(&worker->vqpoll_list)) {
@@ -1222,9 +1261,12 @@ static int vhost_worker_thread(void *data)
 
 		vq = roundrobin_poll(&worker->vqpoll_list);
 		if (vq) {
+#if vhost_statistics
 			u64 softirq_diff_time = 0;
 			u64 softirq_diff = 0;
+#endif
 			set_mm(vq);
+#if vhost_statistics
 			if (vq->avail && vq->last_avail_idx == vq->avail->idx +1 )
 				vq->stats.ring_full++;
 			vq->stats.handled_bytes = 0;
@@ -1232,7 +1274,9 @@ static int vhost_worker_thread(void *data)
 			softirq_diff_time = kcpustat_this_cpu->cpustat[CPUTIME_SOFTIRQ];
 			softirq_diff = kstat_cpu_irqs_sum(get_cpu());
 			rdtscll(poll_start_tsc);
+#endif
 			vq->handle_kick(&vq->poll.work);
+#if vhost_statistics
 			rdtscll(poll_end_tsc);
 			softirq_diff_time = kcpustat_this_cpu->cpustat[CPUTIME_SOFTIRQ] - softirq_diff;
 			softirq_diff = kstat_cpu_irqs_sum(get_cpu()) - softirq_diff;
@@ -1254,10 +1298,13 @@ static int vhost_worker_thread(void *data)
 
 			vq->stats.poll_bytes+=vq->stats.handled_bytes;
 			vq->stats.poll_limited+=vq->stats.was_limited;
+#endif
 		}
+#if vhost_statistics
 		else {
 			worker->stats.empty_polls++;
 		}
+#endif
 		/* If our polling list isn't empty, ask to continue
 		 * running this thread, don't yield.
 		 */
@@ -1265,12 +1312,14 @@ static int vhost_worker_thread(void *data)
 	}
 
 	rdtscll(loop_end_tsc);
+#if vhost_statistics
 	worker->stats.cycles+=(loop_end_tsc-loop_start_tsc)
 							-(work_end_tsc-work_start_tsc)
 							-(poll_end_tsc-poll_start_tsc);
 	if (likely(worker->stats.loops++ > 0))
 		worker->stats.wait+=(loop_start_tsc-worker->stats.last_loop_tsc_end);
 	worker->stats.last_loop_tsc_end = loop_end_tsc;
+#endif
 	if (bh_disabled_tsc) {
 		// interrupts were disabled
 		if (loop_end_tsc - bh_disabled_tsc > worker->max_disabled_soft_interrupts_cycles) {
@@ -1777,7 +1826,7 @@ static void vhost_exit(void)
 	spin_unlock_irq(&workers_pool.workers_lock);
 
 	WARN_ON(i == 0);
-
+	
 	vhost_fs_exit();
 }
 
