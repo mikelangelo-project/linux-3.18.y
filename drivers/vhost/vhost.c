@@ -394,8 +394,12 @@ static struct dev_ext_attribute vhost_fs_queue_attrs[] = {
 	/* Reading returns the number of bytes handled by this queue in the last
 	 * poll/notif. Must be updated by the concrete vhost implementations
 	 * (vhost-net)*/
+	/* Reading returns the number of bytes handled by this queue. */
 	VHOST_FS_QUEUE_STAT_READONLY_ATTR(handled_bytes, stats.handled_bytes),
 
+	/* Reading returns the number of packets handled by this queue. */
+	VHOST_FS_QUEUE_STAT_READONLY_ATTR(handled_packets, stats.handled_packets),
+	
 	/* Writing starts/stops polling of virtual queue.
 	 * Reading returns the current value. */
 	{__ATTR(poll, S_IWUSR | S_IRUSR | S_IWGRP | S_IRGRP | S_IROTH,
@@ -1204,7 +1208,7 @@ static int vhost_worker_thread(void *data)
 #if vhost_statistics
 				if (vq->avail && (vq->last_avail_idx == vq->avail->idx+1))
 					vq->stats.ring_full++;
-				vq->stats.handled_bytes = 0;
+				vq->stats.handled_bytes_this_work = 0;
 				vq->stats.was_limited = 0;
 				softirq_diff_time = kcpustat_this_cpu->cpustat[CPUTIME_SOFTIRQ];
 				softirq_diff = kstat_cpu_irqs_sum(get_cpu());
@@ -1231,7 +1235,7 @@ static int vhost_worker_thread(void *data)
 				if (likely(vq->stats.notif_works++ > 0))
 					vq->stats.notif_wait+=(work_start_tsc-work->arrival_cycles);
 				vq->stats.last_notif_tsc_end = work_end_tsc;
-				vq->stats.notif_bytes+=vq->stats.handled_bytes;
+				vq->stats.notif_bytes+=vq->stats.handled_bytes_this_work;
 				vq->stats.notif_limited+=vq->stats.was_limited;
 #endif
 			} else {
@@ -1269,7 +1273,7 @@ static int vhost_worker_thread(void *data)
 #if vhost_statistics
 			if (vq->avail && vq->last_avail_idx == vq->avail->idx +1 )
 				vq->stats.ring_full++;
-			vq->stats.handled_bytes = 0;
+			vq->stats.handled_bytes_this_work = 0;
 			vq->stats.was_limited = 0;
 			softirq_diff_time = kcpustat_this_cpu->cpustat[CPUTIME_SOFTIRQ];
 			softirq_diff = kstat_cpu_irqs_sum(get_cpu());
@@ -1296,7 +1300,7 @@ static int vhost_worker_thread(void *data)
 				vq->stats.poll_wait+=(poll_start_tsc-vq->stats.last_poll_tsc_end);
 			vq->stats.last_poll_tsc_end = poll_end_tsc;
 
-			vq->stats.poll_bytes+=vq->stats.handled_bytes;
+			vq->stats.poll_bytes+=vq->stats.handled_bytes_this_work;
 			vq->stats.poll_limited+=vq->stats.was_limited;
 #endif
 		}

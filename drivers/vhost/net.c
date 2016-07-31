@@ -352,7 +352,7 @@ static void handle_tx(struct vhost_net *net)
 		.msg_iov = vq->iov,
 		.msg_flags = MSG_DONTWAIT,
 	};
-	size_t len, total_len = 0;
+	size_t len, total_len = 0, total_packets = 0;
 	int err;
 	size_t hdr_size;
 	struct socket *sock;
@@ -459,6 +459,7 @@ static void handle_tx(struct vhost_net *net)
 		else
 			vhost_zerocopy_signal_used(net, vq);
 		total_len += len;
+		total_packets++;
 		vhost_net_tx_packet(net);
 		if (!vhost_can_continue(vq, total_len)) {
 			vq->stats.was_limited = 1;
@@ -473,7 +474,9 @@ static void handle_tx(struct vhost_net *net)
 			break;
 		}
 	}
-	vq->stats.handled_bytes=total_len;
+    vq->stats.handled_bytes_this_work = total_len;
+    vq->stats.handled_bytes += total_len;
+    vq->stats.handled_packets += total_packets;
 
 out:
 	mutex_unlock(&vq->mutex);
@@ -589,7 +592,7 @@ static void handle_rx(struct vhost_net *net)
 		.hdr.flags = 0,
 		.hdr.gso_type = VIRTIO_NET_HDR_GSO_NONE
 	};
-	size_t total_len = 0;
+	size_t total_len = 0, total_packets = 0;
 	int err, mergeable;
 	s16 headcount;
 	size_t vhost_hlen, sock_hlen;
@@ -679,6 +682,7 @@ static void handle_rx(struct vhost_net *net)
 		if (unlikely(vq_log))
 			vhost_log_write(vq, vq_log, log, vhost_len);
 		total_len += vhost_len;
+		total_packets++;
 		if (!vhost_can_continue(vq, total_len)) {
 			vq->stats.was_limited = 1;
 			if (vq->vqpoll.enabled)
@@ -689,7 +693,9 @@ static void handle_rx(struct vhost_net *net)
 			break;
 		}
 	}
-	vq->stats.handled_bytes=total_len;
+	vq->stats.handled_bytes_this_work = total_len;
+	vq->stats.handled_bytes += total_len;
+	vq->stats.handled_packets += total_packets;
 
 out:
 	mutex_unlock(&vq->mutex);
