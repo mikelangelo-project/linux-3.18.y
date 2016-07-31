@@ -193,15 +193,6 @@ struct vhost_virtqueue {
 		u64 ksoftirq_occurrences; /* number of times a softirq occurred during the processing of this queue */
 		u64 ksoftirq_time; /* time (ns) that softirq occurred during the processing of this queue */
 		u64 ksoftirqs; /* the number of softirq interruts handled during the processing of this queue */
-		
-		u64 handle_tx_calls;
-		u64 sendmsg_calls;
-
-		u64 aggregated_time_between_handle_tx_calls;
-		u64 aggregated_time_between_sendmsg_calls;
-
-		u64 last_handle_tx_call;
-		u64 last_sendmsg_call;
 	} stats;
 	struct {
 		/* When a virtqueue is in vqpoll.enabled mode, it declares
