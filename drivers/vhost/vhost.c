@@ -32,6 +32,7 @@
 #include <linux/sched.h>
 #include <linux/cpuset.h>
 #include <linux/moduleparam.h>
+#include <linux/cpufreq.h>
 #include <linux/kernel_stat.h>
 #define MODULE_NAME "vhost"
 
@@ -208,6 +209,7 @@ DECLARE_VHOST_FS_SHOW(vhost_fs_worker_get_total_ksoftirqs);
 DECLARE_VHOST_FS_SHOW(vhost_fs_worker_get_pid);
 DECLARE_VHOST_FS_SHOW(vhost_fs_worker_get_dev_list);
 DECLARE_VHOST_FS_SHOW(vhost_fs_worker_get_stats_ptr);
+DECLARE_VHOST_FS_SHOW(vhost_fs_worker_get_cpu_freq);
 
 /* per worker attributes */
 static struct dev_ext_attribute vhost_fs_per_worker_attrs[] = {
@@ -292,6 +294,8 @@ static struct dev_ext_attribute vhost_fs_per_worker_attrs[] = {
 	{__ATTR(dev_list, S_IRUSR | S_IRGRP | S_IROTH, vhost_fs_worker_get_dev_list,
 			NULL), NULL},
 	{__ATTR(stats_ptr, S_IRUSR | S_IRGRP | S_IROTH, vhost_fs_worker_get_stats_ptr,
+			NULL), NULL},
+	{__ATTR(cpu_freq, S_IRUSR | S_IRGRP | S_IROTH, vhost_fs_worker_get_cpu_freq,
 			NULL), NULL},
 };
 
@@ -3943,6 +3947,20 @@ ssize_t vhost_fs_worker_get_stats_ptr(struct device *dir,
 	// vhost_printk("START: dev.%d\n", w->id);
 	length = sprintf(buf, "%p\n", &w->stats);
 	// vhost_printk("DONE!\npage = %s length = %ld\n", buf, length);
+	return length;
+}
+
+ssize_t vhost_fs_worker_get_cpu_freq(struct device *dev,
+	struct device_attribute *attr, char *buf){
+
+	ssize_t length = 0;
+	unsigned long cpufreq = 0;
+	struct vhost_worker *worker = (struct vhost_worker *)dev_get_drvdata(dev);
+	int cpu = worker_get_cpu(worker);
+
+	if (cpu != -1)
+		cpufreq = cpufreq_get(cpu) * 1000;
+	length = sprintf(buf, "%lu\n", cpufreq);
 	return length;
 }
 
