@@ -347,6 +347,7 @@ struct vhost_worker {
 		u64 loops; /* number of loops performed */
 		u64 enabled_interrupts; /* number of times interrupts were re-enabled */
 		u64 cycles; /* cycles spent in the worker, excluding cycles doing queue work */
+		u64 total_cycles; /* cycles spent in the worker */
 		u64 mm_switches; /* number of times the mm was switched */
 		u64 wait; /* number of cycles the worker thread was not running after schedule */
 		u64 empty_works; /* number of times there were no works in the queue -- ignoring poll kicks  */

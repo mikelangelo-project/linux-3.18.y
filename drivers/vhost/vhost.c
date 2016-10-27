@@ -222,6 +222,8 @@ static struct dev_ext_attribute vhost_fs_per_worker_attrs[] = {
 	/* Reading returns the cycles spent in the worker, excluding cycles
 	 * doing queue work. */
 	VHOST_FS_WORKER_STAT_READONLY_ATTR(cycles, stats.cycles),
+	/* Reading returns the total cycles spent in the worker */
+	VHOST_FS_WORKER_STAT_READONLY_ATTR(total_cycles, stats.total_cycles),
 	/* Reading returns the cycles spent in the workerhandling kicks in 
 	 * poll mode. */
 	VHOST_FS_WORKER_STAT_READONLY_ATTR(poll_cycles, stats.poll_cycles),
@@ -1329,6 +1331,7 @@ static int vhost_worker_thread(void *data)
 	worker->stats.cycles+=(loop_end_tsc-loop_start_tsc)
 							-(work_end_tsc-work_start_tsc)
 							-(poll_end_tsc-poll_start_tsc);
+	worker->stats.total_cycles+=(loop_end_tsc-loop_start_tsc);
 	if (likely(worker->stats.loops++ > 0))
 		worker->stats.wait+=(loop_start_tsc-worker->stats.last_loop_tsc_end);
 	worker->stats.last_loop_tsc_end = loop_end_tsc;
