@@ -346,6 +346,7 @@ struct vhost_worker {
 	struct {
 		u64 loops; /* number of loops performed */
 		u64 enabled_interrupts; /* number of times interrupts were re-enabled */
+		u64 tsc_cycles; /* current tsc read */
 		u64 cycles; /* cycles spent in the worker, excluding cycles doing queue work */
 		u64 total_cycles; /* cycles spent in the worker */
 		u64 mm_switches; /* number of times the mm was switched */

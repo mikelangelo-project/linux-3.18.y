@@ -219,6 +219,8 @@ static struct dev_ext_attribute vhost_fs_per_worker_attrs[] = {
 	 * the worker. */
 	VHOST_FS_WORKER_STAT_READONLY_ATTR(enabled_interrupts,
 			stats.enabled_interrupts),
+	/* Reading returns the current TSC read for the worker */
+	VHOST_FS_WORKER_STAT_READONLY_ATTR(tsc_cycles, stats.tsc_cycles),
 	/* Reading returns the cycles spent in the worker, excluding cycles
 	 * doing queue work. */
 	VHOST_FS_WORKER_STAT_READONLY_ATTR(cycles, stats.cycles),
@@ -1170,6 +1172,7 @@ static int vhost_worker_thread(void *data)
 		poll_start_tsc = 0, poll_end_tsc = 0,
 		work_start_tsc = 0, work_end_tsc = 0;
 		rdtscll(loop_start_tsc);
+		worker->stats.tsc_cycles = loop_start_tsc;
 #endif
 		/* mb paired w/ kthread_stop */
 		set_current_state(TASK_INTERRUPTIBLE);
@@ -1224,10 +1227,12 @@ static int vhost_worker_thread(void *data)
 				softirq_diff_time = kcpustat_this_cpu->cpustat[CPUTIME_SOFTIRQ];
 				softirq_diff = kstat_cpu_irqs_sum(get_cpu());
 				rdtscll(work_start_tsc);
+				worker->stats.tsc_cycles = work_start_tsc;
 #endif
 				work->fn(work);
 #if vhost_statistics
 				rdtscll(work_end_tsc);
+				worker->stats.tsc_cycles = work_end_tsc;
 				softirq_diff_time = kcpustat_this_cpu->cpustat[CPUTIME_SOFTIRQ] - softirq_diff_time;
 				softirq_diff = kstat_cpu_irqs_sum(get_cpu()) - softirq_diff;
 				if (softirq_diff > 0){
@@ -1289,10 +1294,12 @@ static int vhost_worker_thread(void *data)
 			softirq_diff_time = kcpustat_this_cpu->cpustat[CPUTIME_SOFTIRQ];
 			softirq_diff = kstat_cpu_irqs_sum(get_cpu());
 			rdtscll(poll_start_tsc);
+			worker->stats.tsc_cycles = poll_start_tsc;
 #endif
 			vq->handle_kick(&vq->poll.work);
 #if vhost_statistics
 			rdtscll(poll_end_tsc);
+			worker->stats.tsc_cycles = poll_end_tsc;
 			softirq_diff_time = kcpustat_this_cpu->cpustat[CPUTIME_SOFTIRQ] - softirq_diff;
 			softirq_diff = kstat_cpu_irqs_sum(get_cpu()) - softirq_diff;
 			if (softirq_diff > 0){
@@ -1332,6 +1339,7 @@ static int vhost_worker_thread(void *data)
 							-(work_end_tsc-work_start_tsc)
 							-(poll_end_tsc-poll_start_tsc);
 	worker->stats.total_cycles+=(loop_end_tsc-loop_start_tsc);
+	worker->stats.tsc_cycles = loop_end_tsc;
 	if (likely(worker->stats.loops++ > 0))
 		worker->stats.wait+=(loop_start_tsc-worker->stats.last_loop_tsc_end);
 	worker->stats.last_loop_tsc_end = loop_end_tsc;
