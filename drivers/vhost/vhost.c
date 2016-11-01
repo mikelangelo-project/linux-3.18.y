@@ -158,6 +158,9 @@ static ssize_t vhost_fs_get_cycles(struct class *class,
 		struct class_attribute *attr, char *buf);
 static ssize_t vhost_fs_get_nr_iocores(struct class *class,
 		struct class_attribute *attr, char *buf);
+static ssize_t vhost_fs_get_iocores_utilization(struct class *class,
+		struct class_attribute *attr, char *buf);
+
 
 /* global attributes */
 static struct class_attribute vhost_fs_global_attrs[] = {
@@ -173,6 +176,9 @@ static struct class_attribute vhost_fs_global_attrs[] = {
 
 	__ATTR(nr_iocores, S_IRUSR | S_IRGRP| S_IROTH,
 			vhost_fs_get_nr_iocores, NULL),
+	/* Reading returns the effective utilization per I/O core */
+	__ATTR(iocores_utilization, S_IRUSR | S_IRGRP| S_IROTH,
+			vhost_fs_get_iocores_utilization, NULL),
 };
 
 DECLARE_VHOST_FS_SHOW(vhost_fs_get_recent_new_workers);
@@ -3593,6 +3599,25 @@ static ssize_t vhost_fs_get_nr_iocores(struct class *class,
 			nr_iocores++;
 	spin_unlock_irq(&workers_pool.workers_lock);
 	length = sprintf(buf, "%d\n", nr_iocores);
+	return length;
+}
+
+static ssize_t vhost_fs_get_iocores_utilization(struct class *class,
+		struct class_attribute *attr, char *buf){
+	struct vhost_worker *worker = NULL;
+	ssize_t length = 0;
+	int nr_iocores = 0;
+
+	spin_lock_irq(&workers_pool.workers_lock);
+	list_for_each_entry_reverse(worker, &workers_pool.workers_list, node) {
+		if (list_empty(&worker->vqpoll_list))
+			continue;
+		else
+			nr_iocores++;
+		length += sprintf(buf+length, "cpu%d %llu %llu\n", nr_iocores,
+						  worker->stats.total_work_cycles, worker->stats.tsc_cycles);
+	}
+	spin_unlock_irq(&workers_pool.workers_lock);
 	return length;
 }
 
