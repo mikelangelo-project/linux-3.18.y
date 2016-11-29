@@ -361,7 +361,8 @@ struct vhost_worker {
 
 		u64 poll_cycles; /* cycles spent handling kicks in poll mode */		
 		u64 notif_cycles; /* cycles spent handling works in notif mode */
-		u64 total_work_cycles; /* total cycles spent handling works */
+		u64 nett_work_cycles; /* total cycles spent handling works */
+		u64 total_work_cycles; /* total cycles spent handling works including worker thread overhead */
 
 		u64 ksoftirq_occurrences; /* number of times a softirq occured during worker work */
 		u64 ksoftirq_time; /* time (ns) that softirq process took while worker processed its work */

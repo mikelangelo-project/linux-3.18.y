@@ -240,6 +240,10 @@ static struct dev_ext_attribute vhost_fs_per_worker_attrs[] = {
 	VHOST_FS_WORKER_STAT_READONLY_ATTR(notif_cycles, stats.notif_cycles),
 	/* Reading returns the cycles spent in the worker handling works 
 	 * in any mode. */
+	VHOST_FS_WORKER_STAT_READONLY_ATTR(nett_work_cycles,
+		stats.nett_work_cycles),
+	/* Reading returns the cycles spent in the worker handling works
+	 * in any mode, including associated overhead. */
 	VHOST_FS_WORKER_STAT_READONLY_ATTR(total_work_cycles, 
 		stats.total_work_cycles),
 	/* Reading returns the number of softirq interruts handled during worker processed its work. */
@@ -1164,6 +1168,10 @@ static int vhost_worker_thread(void *data)
 	struct vhost_work *work = NULL;
 	unsigned uninitialized_var(seq);
 	mm_segment_t oldfs = get_fs();
+#if vhost_statistics
+	u64 loop_start_tsc;
+	rdtscll(loop_start_tsc);
+#endif
 
 	set_fs(USER_DS);
 	if (worker->max_disabled_soft_interrupts_cycles) {
@@ -1172,13 +1180,11 @@ static int vhost_worker_thread(void *data)
 	}
 
 	for (;;) {
+		bool work_been_done = false;
 		u64 loop_end_tsc;
 #if vhost_statistics
-		u64 loop_start_tsc,
-		poll_start_tsc = 0, poll_end_tsc = 0,
-		work_start_tsc = 0, work_end_tsc = 0;
-		rdtscll(loop_start_tsc);
-		worker->stats.tsc_cycles = loop_start_tsc;
+		u64 poll_start_tsc = 0, poll_end_tsc = 0,
+		    work_start_tsc = 0, work_end_tsc = 0;
 #endif
 		/* mb paired w/ kthread_stop */
 		set_current_state(TASK_INTERRUPTIBLE);
@@ -1238,6 +1244,7 @@ static int vhost_worker_thread(void *data)
 				work->fn(work);
 #if vhost_statistics
 				rdtscll(work_end_tsc);
+				work_been_done = true;
 				worker->stats.tsc_cycles = work_end_tsc;
 				softirq_diff_time = kcpustat_this_cpu->cpustat[CPUTIME_SOFTIRQ] - softirq_diff_time;
 				softirq_diff = kstat_cpu_irqs_sum(get_cpu()) - softirq_diff;
@@ -1252,7 +1259,7 @@ static int vhost_worker_thread(void *data)
 				}
 				vq->stats.notif_cycles += (work_end_tsc - work_start_tsc);
 				worker->stats.notif_cycles += (work_end_tsc - work_start_tsc);
-				worker->stats.total_work_cycles += (work_end_tsc - work_start_tsc);
+				worker->stats.nett_work_cycles += (work_end_tsc - work_start_tsc);
 
 				if (likely(vq->stats.notif_works++ > 0))
 					vq->stats.notif_wait+=(work_start_tsc-work->arrival_cycles);
@@ -1264,6 +1271,7 @@ static int vhost_worker_thread(void *data)
 				vhost_printk("performing noqueue work = %p\n.", work);
 				work->fn(work);
 #if vhost_statistics
+				work_been_done = true;
 				worker->stats.noqueue_works++;
 #endif
 			}
@@ -1305,6 +1313,7 @@ static int vhost_worker_thread(void *data)
 			vq->handle_kick(&vq->poll.work);
 #if vhost_statistics
 			rdtscll(poll_end_tsc);
+			work_been_done = true;
 			worker->stats.tsc_cycles = poll_end_tsc;
 			softirq_diff_time = kcpustat_this_cpu->cpustat[CPUTIME_SOFTIRQ] - softirq_diff;
 			softirq_diff = kstat_cpu_irqs_sum(get_cpu()) - softirq_diff;
@@ -1319,7 +1328,7 @@ static int vhost_worker_thread(void *data)
 			}
 			vq->stats.poll_cycles+=(poll_end_tsc-poll_start_tsc);
 			worker->stats.poll_cycles+=(poll_end_tsc-poll_start_tsc);
-			worker->stats.total_work_cycles+=(poll_end_tsc-poll_start_tsc);
+			worker->stats.nett_work_cycles+=(poll_end_tsc-poll_start_tsc);
 			if (likely(vq->stats.poll_kicks++ > 0))
 				vq->stats.poll_wait+=(poll_start_tsc-vq->stats.last_poll_tsc_end);
 			vq->stats.last_poll_tsc_end = poll_end_tsc;
@@ -1345,10 +1354,13 @@ static int vhost_worker_thread(void *data)
 							-(work_end_tsc-work_start_tsc)
 							-(poll_end_tsc-poll_start_tsc);
 	worker->stats.total_cycles+=(loop_end_tsc-loop_start_tsc);
+	if (work_been_done)
+		worker->stats.total_work_cycles += (loop_end_tsc - loop_start_tsc);
 	worker->stats.tsc_cycles = loop_end_tsc;
 	if (likely(worker->stats.loops++ > 0))
 		worker->stats.wait+=(loop_start_tsc-worker->stats.last_loop_tsc_end);
 	worker->stats.last_loop_tsc_end = loop_end_tsc;
+	loop_start_tsc = loop_end_tsc;
 #endif
 	if (bh_disabled_tsc) {
 		// interrupts were disabled
